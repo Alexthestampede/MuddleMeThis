@@ -1,0 +1,17 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=MuddleMeThis
+Comment=AI-powered prompt engineering and image generation
+Exec=/FULL/PATH/TO/MuddleMeThis/launch.sh
+Path=/FULL/PATH/TO/MuddleMeThis
+Icon=utilities-terminal
+Terminal=true
+Categories=Graphics;Development;
+Keywords=AI;image;generation;prompt;
+
+# INSTALLATION INSTRUCTIONS:
+# 1. Replace /FULL/PATH/TO/MuddleMeThis with your actual installation path
+# 2. Save as MuddleMeThis.desktop (remove .template)
+# 3. Copy to ~/.local/share/applications/
+# 4. Make executable: chmod +x ~/.local/share/applications/MuddleMeThis.desktop

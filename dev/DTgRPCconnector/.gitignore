@@ -1,0 +1,62 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+ENV/
+env/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Output files
+output/
+*.png
+*.jpg
+*.jpeg
+*.tensor
+
+# Logs
+*.log
+*.out
+
+# Temporary files
+/tmp/
+*.tmp
+
+# Debug and test output
+debug/
+test_flux_auto.*
+server_cert.pem
+SOLUTION_SUMMARY.md
+
+# Draw Things specific
+draw-things-community/

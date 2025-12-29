@@ -1,0 +1,10 @@
+{
+  "llm_server": "http://localhost:1234",
+  "llm_model": "",
+  "grpc_server": "localhost:7859",
+  "last_used_model": "",
+  "last_used_lora": "",
+  "default_steps": 16,
+  "default_cfg": 7.0,
+  "default_aspect_ratio": "1:1 1024x1024"
+}

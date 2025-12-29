@@ -1,0 +1,10 @@
+{
+  "name": "Flux Schnell",
+  "description": "Lightweight version of Flux",
+  "base_resolution": 1024,
+  "clip_skip": 1,
+  "recommended_steps": 4,
+  "recommended_cfg": 4.5,
+  "sampler": "Euler A Trailing",
+  "notes": "A good all rounder"
+}

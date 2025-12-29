@@ -1,0 +1,13 @@
+# MuddleMeThis - Main Application Requirements
+
+# UI Framework
+gradio>=4.0.0
+
+# Core dependencies (from dev components)
+# Note: Install dev/DTgRPCconnector and dev/ModuLLe separately
+
+# Image handling
+Pillow>=10.0.0
+
+# For potential future needs
+python-dotenv>=1.0.0

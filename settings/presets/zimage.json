@@ -1,0 +1,10 @@
+{
+  "name": "Z-Image Turbo",
+  "description": "Similar to Qwen Image, less resource intensive",
+  "base_resolution": 1024,
+  "clip_skip": 1,
+  "recommended_steps": 8,
+  "recommended_cfg": 1.0,
+  "sampler": "UniPC Trailing",
+  "notes": "It's a fan favorite"
+}

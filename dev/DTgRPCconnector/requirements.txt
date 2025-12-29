@@ -1,0 +1,15 @@
+# Draw Things gRPC Python Client Requirements
+
+# gRPC and Protocol Buffers
+grpcio>=1.60.0
+grpcio-tools>=1.60.0
+
+# FlatBuffers for configuration
+flatbuffers>=23.5.26
+
+# Image processing
+Pillow>=10.0.0
+numpy>=1.24.0
+
+# Tensor compression
+fpzip>=1.2.0

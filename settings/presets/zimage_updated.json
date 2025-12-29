@@ -1,0 +1,45 @@
+{
+  "name": "Z-Image Turbo (Official Settings)",
+  "description": "Official Z-Image Turbo settings from Draw Things app",
+  "base_resolution": 1024,
+
+  "_comment_basic": "Basic generation settings",
+  "steps": 8,
+  "guidanceScale": 1.0,
+  "sampler": 17,
+  "strength": 1.0,
+
+  "_comment_advanced": "Advanced settings",
+  "shift": 3.0,
+  "sharpness": 0.0,
+  "seedMode": 2,
+  "resolutionDependentShift": false,
+
+  "_comment_quality": "Quality enhancement",
+  "hiresFix": false,
+  "tiledDiffusion": false,
+  "tiledDecoding": false,
+  "cfgZeroStar": false,
+  "cfgZeroInitSteps": 0,
+
+  "_comment_inpainting": "Inpainting settings",
+  "maskBlur": 1.5,
+  "maskBlurOutset": 0,
+  "preserveOriginalAfterInpaint": true,
+
+  "_comment_batch": "Batch settings",
+  "batchCount": 1,
+  "batchSize": 1,
+
+  "_comment_optional": "Optional models (empty for none)",
+  "upscaler": "",
+  "refinerModel": "",
+  "faceRestoration": "",
+
+  "_comment_other": "Other settings",
+  "causalInferencePad": 0,
+  "loras": [],
+  "controls": [],
+
+  "notes": "Fan favorite - fast and efficient"
+}

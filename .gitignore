@@ -1,0 +1,57 @@
+# Virtual Environment
+venv/
+env/
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Claude Code
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Generated images and outputs
+outputs/
+*.png
+*.jpg
+*.jpeg
+!dev/**/*.png  # Keep example images in dev folder
+
+# Logs
+*.log
+
+# Config files with secrets
+.env
+config.local.json
+*.secret
+
+# ModuLLe user config
+.modulle.json
+
+# MuddleMeThis user config (keep templates, ignore user customizations)
+settings/config.json
+
+# User-customized desktop file
+MuddleMeThis.desktop
+
+# Temporary development files
+temp/
+tmp/
+scratch/

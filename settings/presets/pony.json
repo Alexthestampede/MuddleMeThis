@@ -1,0 +1,10 @@
+{
+  "name": "Pony, Illustrious, NoobXL etc",
+  "description": "Extreme fine tunes of Stable Diffusion XL model settings",
+  "base_resolution": 1024,
+  "clip_skip": 2,
+  "recommended_steps": 16,
+  "recommended_cfg": 5.0,
+  "sampler": "DPM++ 2M AYS",
+  "notes": "Those NEED clip_skip=2"
+}

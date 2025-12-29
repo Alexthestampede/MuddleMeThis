@@ -1,0 +1,10 @@
+{
+  "name": "SD 1.5 Standard",
+  "description": "Standard Stable Diffusion 1.5 model settings",
+  "base_resolution": 512,
+  "clip_skip": 1,
+  "recommended_steps": 16,
+  "recommended_cfg": 5.0,
+  "sampler": "DPM++ 2M AYS",
+  "notes": "Fast and dirty"
+}

@@ -1,0 +1,10 @@
+{
+  "name": "Qwen Image/Qwen Image Edit",
+  "description": "As of end of 2025, SOTA",
+  "base_resolution": 1024,
+  "clip_skip": 1,
+  "recommended_steps": 30,
+  "recommended_cfg": 4.0,
+  "sampler": "UniPC Trailing",
+  "notes": "Works well with lightning lora"
+}

@@ -1,0 +1,10 @@
+{
+  "name": "Chroma",
+  "description": "Chroma is a powerful, finicky beast",
+  "base_resolution": 1024,
+  "clip_skip": 1,
+  "recommended_steps": 28,
+  "recommended_cfg": 4.5,
+  "sampler": "Euler A Trailing",
+  "notes": "Probably needs a negative prompt"
+}
