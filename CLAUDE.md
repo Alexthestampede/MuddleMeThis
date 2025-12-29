@@ -4,9 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-MuddleMeThis is a generative AI application that connects vision-enabled LLMs with image generation via Draw Things gRPC. It provides an interface for prompt manipulation (expansion, extraction, refinement) and uses the resulting prompts to generate images.
+MuddleMeThis is a production-ready Gradio web application that connects vision-enabled LLMs (LM Studio, Ollama) with Draw Things gRPC server for image generation. It provides a comprehensive interface for AI-powered prompt manipulation (expansion, extraction, refinement) and high-quality image generation with advanced features like dual LoRA support, resolution-dependent shift calculation, and PWA installation.
 
-**GitHub**: https://github.com/Alexthestampede/MuddleMeThis
+**Version**: 1.0.0
+**GitHub**: https://github.com/AlexTheStampede/MuddleMeThis
 
 ## Development Environment
 
@@ -36,12 +37,34 @@ cd ../..
 
 ```
 MuddleMeThis/
-├── dev/                           # Development code and libraries
+├── app.py                         # Main Gradio application (52KB, ~1150 lines)
+├── settings_manager.py            # Settings persistence and management
+├── convert_presets.py             # Utility to convert Draw Things presets
+├── launch.sh / launch.bat         # Cross-platform launch scripts
+├── setup.sh                       # Automated installation script
+├── manifest.json                  # PWA configuration
+├── MuddleMeThis.desktop.template  # Linux desktop integration template
+├── requirements.txt               # Python dependencies
+├── settings/
+│   ├── config.json               # User settings (auto-created, gitignored)
+│   ├── config.example.json       # Example configuration
+│   ├── expand.txt                # System prompt for expansion
+│   ├── extract.txt               # System prompt for extraction
+│   ├── refine.txt                # System prompt for refinement
+│   ├── aspectratio.txt           # Aspect ratio definitions
+│   └── presets/                  # Model presets (JSON)
+│       ├── flux_official.json
+│       ├── schnell_official.json
+│       ├── ponysdxl_official.json
+│       ├── sd15_official.json
+│       ├── qwenimage_official.json
+│       └── chroma_official.json
+├── dev/
 │   ├── DTgRPCconnector/          # Draw Things gRPC Python client
 │   ├── ModuLLe/                  # LLM provider abstraction layer
-│   └── plans.txt                 # Project planning document
-├── venv/                          # Virtual environment (gitignored)
-└── [main application TBD]         # Future UI and core logic
+│   └── *.txt                     # Official preset source files
+├── outputs/                       # Generated images (auto-created, gitignored)
+└── venv/                          # Virtual environment (gitignored)
 ```
 
 ### dev/DTgRPCconnector - Draw Things gRPC Client
@@ -57,11 +80,17 @@ A Python client library for Draw Things gRPC server enabling programmatic image 
 
 **Critical Concepts**:
 - **Scale Factors**: `start_width` and `start_height` are NOT pixel dimensions, they are scale factors
-  - Formula: `scale_factor = desired_pixels ÷ latent_size`
-  - SD 1.5 (latent_size=64): 512px → scale=8, 768px → scale=12, 1024px → scale=16
-  - SDXL (latent_size=128): 1024px → scale=8, 1536px → scale=12
+  - **IMPORTANT**: Server always multiplies by 64, regardless of model latent_size!
+  - Universal formula: `scale_factor = desired_pixels ÷ 64`
+  - All models: 512px → scale=8, 1024px → scale=16, 1536px → scale=24
+  - SDXL workaround: Use `÷ 64` even though latent_size is 128
+- **Resolution-Dependent Shift**: Client-side calculation for optimal quality
+  - Formula: `adjusted_shift = base_shift × (1.2 + 2.0 × pixel_ratio)`
+  - Where: `pixel_ratio = (target_width × target_height) / (base_resolution²)`
+  - Derived from official Draw Things app behavior via linear regression
 - **Automatic Detection**: Client queries server metadata to determine correct latent_size for each model
-- **Clip Skip**: Critical parameter - some models require clip_skip=1, others need clip_skip=2
+- **CLIP Skip**: Critical parameter - SD 1.5 needs clip_skip=1, Pony/Illustrious need clip_skip=2
+- **Dual LoRA Support**: Up to 2 LoRAs simultaneously with independent weight control (0.0-2.0)
 
 **Example Usage**:
 ```bash
@@ -132,30 +161,42 @@ description = vision_processor.analyze_image(
 )
 ```
 
-## Planned Features
+## Implemented Features
 
-### Core Functionality
-1. **Prompt Expansion**: User inputs brief prompt, LLM expands it with details
-2. **Prompt Extraction**: User uploads image, LLM generates matching prompt
-3. **Prompt Refinement**: User requests modifications ("change hair to red"), LLM adjusts prompt
-4. **Direct Mode**: User writes complete prompt, uses as-is
+### Core Functionality (✅ Complete)
+1. **Prompt Expansion**: User inputs brief prompt, LLM expands it with rich details
+2. **Prompt Extraction**: User uploads image, vision LLM generates matching prompt
+3. **Prompt Refinement**: User requests modifications, LLM adjusts prompt intelligently
+4. **Direct Mode**: User writes complete prompt, uses as-is for generation
 
-### UI Components (TBD)
-- Prompt input text area
-- Image file selector with preview
-- Task selection (expansion/extraction/refinement/direct)
-- LLM output display area
-- Generated image display area
-- Settings panel for LLM and gRPC configuration
-- Generate button to trigger image creation
+### UI Implementation (Gradio)
+- Tabbed interface with Settings, Expand, Extract, Refine, Direct, and Generate sections
+- Text areas with copy buttons and character counts
+- Image upload with preview and drag-drop support
+- Real-time progress tracking during generation
+- Generated image display with metadata
+- Searchable/filterable dropdowns for models and LoRAs
+- Comprehensive settings panel with connection status indicators
+
+### Advanced Features
+- **Multi-Provider LLM**: Supports both LM Studio and Ollama with automatic model discovery
+- **Separate Vision Models**: Independent text and vision model selection (supports Qwen3-VL, LLaVA, Llama Vision, etc.)
+- **Dual LoRA Support**: Use up to 2 LoRAs simultaneously with adjustable weights
+- **Resolution-Dependent Shift**: Automatic shift adjustment based on target resolution
+- **Official Presets**: 6 official Draw Things presets (FLUX, Schnell, Pony, SDXL, SD1.5, Qwen, Chroma)
+- **Auto-Save**: Images saved with descriptive filenames and comprehensive PNG metadata
+- **Generation Timing**: Track how long each image takes to generate
+- **PWA Support**: Install as standalone progressive web app
+- **Cross-Platform**: Launch scripts for Linux, Mac, and Windows
 
 ### Settings Management
-- LLM server address (default: localhost for simplicity)
-- gRPC server address (default: localhost)
-- Available LLM model list
-- Available gRPC model + LoRA lists
-- gRPC model presets (different models need different clip_skip, sampler settings, etc.)
-- System prompts stored as editable text files
+- Persistent JSON configuration (auto-created, gitignored)
+- LLM and gRPC server addresses with connection testing
+- Model and LoRA selection from server listings
+- Custom aspect ratios and resolution presets
+- Model-specific presets (steps, CFG, sampler, CLIP skip, shift)
+- Editable system prompts in text files
+- Settings survive restarts and sync across tabs
 
 ## Development Guidelines
 
@@ -186,6 +227,36 @@ Always test against the configured servers:
 - LM Studio: `192.168.2.20:1234` with `qwen3-vl-8b-instruct-abliterated-v2.0`
 - Draw Things gRPC: `192.168.2.150:7859`
 
+## Running the Application
+
+### Quick Start
+```bash
+# Easy launch (recommended)
+./launch.sh              # Linux/Mac
+launch.bat               # Windows
+
+# Or manually
+python app.py
+```
+
+Access at: **http://localhost:7860**
+
+### First-Time Setup
+1. **Start LLM Server**:
+   - LM Studio: Load a model and start server (port 1234)
+   - Ollama: `ollama run qwen3-vl:4b-instruct`
+
+2. **Start Draw Things**:
+   - Enable gRPC server in settings (port 7859)
+   - Load desired models
+
+3. **Configure MuddleMeThis**:
+   - Go to Settings tab
+   - Select LLM provider and connect
+   - Select text and vision models
+   - Connect to gRPC server
+   - Select generation model
+
 ## Common Tasks
 
 ### Test DTgRPCconnector
@@ -198,8 +269,17 @@ python examples/generate_image.py "test prompt" --server 192.168.2.150:7859
 ### Test ModuLLe
 ```bash
 cd dev/ModuLLe
-python test_basic.py
 python examples/basic_usage.py
+```
+
+### Run MuddleMeThis
+```bash
+# Activate venv if not already active
+source venv/bin/activate  # Linux/Mac
+# or: venv\Scripts\activate  # Windows
+
+# Launch application
+python app.py
 ```
 
 ### Add New gRPC Model Preset
