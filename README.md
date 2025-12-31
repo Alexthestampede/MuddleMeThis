@@ -18,7 +18,10 @@ AI-powered prompt engineering and image generation workbench. Connect vision-ena
 - **Draw Things Integration**: Connect to Draw Things gRPC server
 - **Multiple Models**: FLUX, SDXL, SD 1.5, Pony, Z-Image, Qwen, and more
 - **Dual LoRA Support**: Use up to 2 LoRAs simultaneously with adjustable weights (0.0-2.0)
-- **Smart Resolution**: Automatic resolution-dependent shift calculation for optimal quality
+- **High-Res Fix**: Two-pass generation for superior quality (e.g., 512→1024 for SD 1.5)
+- **Resolution Scale**: Multiply any aspect ratio by 0.5x-4x for flexible output sizes
+- **Smart Shift**: Official exponential formula from Draw Things for optimal quality
+- **Negative Prompt Presets**: Quick-select common negative prompts (Realistic, Anime/Pony, Simple, None)
 - **Official Presets**: 6 pre-configured presets from Draw Things (FLUX, Schnell, Pony, SDXL, SD1.5, Qwen, Chroma)
 - **Real-time Progress**: Live step tracking during generation
 - **Auto-save**: Descriptive filenames with full PNG metadata embedding

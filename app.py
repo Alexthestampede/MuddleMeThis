@@ -13,10 +13,14 @@ from PIL.PngImagePlugin import PngInfo
 import io
 import sys
 import os
+import subprocess
 import time
 from pathlib import Path
 from typing import Optional, Tuple, List
 from datetime import datetime
+
+# Application version
+APP_VERSION = "1.0.0"
 
 # Suppress gRPC SSL handshake warnings (these are harmless when using self-signed certs)
 os.environ['GRPC_VERBOSITY'] = 'ERROR'
@@ -438,22 +442,42 @@ def on_preset_selected(preset_name: str) -> Tuple[int, float, str, str, float, b
         seed_mode = preset.get('seedMode', 2)
         cfg_zero = preset.get('cfgZeroStar', False)
         hires_fix = preset.get('hiresFix', False)
+        # Convert scale units to pixels for UI (scale_units * 64 = pixels)
+        hires_fix_start_width = preset.get('hiresFixStartWidth', 0) * 64
+        hires_fix_start_height = preset.get('hiresFixStartHeight', 0) * 64
+        hires_fix_strength = preset.get('hiresFixStrength', 0.7)
         clip_skip = preset.get('clip_skip', 1)  # Pony needs 2, most others need 1
 
         notes = preset.get('notes', '')
         info = f"✅ Preset applied: {preset.get('name', 'Unknown')}\n{notes}"
 
-        return steps, cfg, info, sampler_name, shift, res_shift, seed_mode, cfg_zero, hires_fix, clip_skip
+        return (steps, cfg, info, sampler_name, shift, res_shift, seed_mode, cfg_zero,
+                hires_fix, hires_fix_start_width, hires_fix_start_height, hires_fix_strength, clip_skip)
     else:
         return (gr.update(), gr.update(), f"⚠️ Preset not found: {preset_name}",
-                gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update())
+                gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(),
+                gr.update(), gr.update(), gr.update(), gr.update())
+
+
+def on_negative_prompt_preset_selected(preset_name: str) -> str:
+    """When a negative prompt preset is selected, return its text"""
+    if not preset_name:
+        return gr.update()
+
+    negative_prompt_presets = settings.load_negative_prompts()
+    if preset_name in negative_prompt_presets:
+        preset = negative_prompt_presets[preset_name]
+        return preset.get('negative_prompt', '')
+    else:
+        return gr.update()
 
 
 def generate_image(prompt: str, model: str, lora1: str, lora1_weight: float, lora2: str, lora2_weight: float,
-                  steps: int, cfg_scale: float, sampler_name: str, aspect_ratio: str,
+                  steps: int, cfg_scale: float, sampler_name: str, aspect_ratio: str, resolution_scale: str,
                   seed: int, negative_prompt: str,
                   shift: float, res_dependent_shift: bool, seed_mode: int,
-                  cfg_zero_star: bool, hires_fix: bool, clip_skip: int, progress=gr.Progress()):
+                  cfg_zero_star: bool, hires_fix: bool, hires_fix_start_width: int, hires_fix_start_height: int,
+                  hires_fix_strength: float, clip_skip: int, progress=gr.Progress()):
     """Generate image using Draw Things gRPC with progress tracking"""
     if not state.grpc_client:
         return None, "❌ gRPC not initialized. Configure in Settings tab first."
@@ -476,8 +500,8 @@ def generate_image(prompt: str, model: str, lora1: str, lora1_weight: float, lor
         # Get model metadata FIRST to determine latent size and base resolution (use filename)
         try:
             model_info = state.grpc_metadata.get_latent_info(model_file)
-            latent_size = model_info.get('latent_size', 128)
-            version = model_info.get('version', 'sdxl')
+            latent_size = model_info.get('latent_size') or 128  # Handle None/null values
+            version = model_info.get('version') or 'sdxl'
 
             print(f"\n🔍 Model Metadata for {model} → {model_file}:")
             print(f"   Version: {version}")
@@ -513,29 +537,85 @@ def generate_image(prompt: str, model: str, lora1: str, lora1_weight: float, lor
                 width, height = w, h
                 break
 
-        print(f"\n📐 Aspect Ratio: {aspect_ratio}")
+        # Apply resolution scale multiplier
+        scale_multiplier = float(resolution_scale.replace('x', ''))
+        width = int(width * scale_multiplier)
+        height = int(height * scale_multiplier)
+
+        # Round to nearest 64 pixels (required for VAE)
+        width = (width + 32) // 64 * 64
+        height = (height + 32) // 64 * 64
+
+        print(f"\n📐 Aspect Ratio: {aspect_ratio} × {resolution_scale}")
         print(f"   → Pixel Dimensions: {width}x{height}")
         print(f"   → Latent Size: {latent_size}")
 
         # Calculate resolution-dependent shift (client-side calculation)
-        # The server doesn't have AddResolutionDependentShift - we calculate it ourselves
+        # Official formula from Draw Things ModelZoo.swift:2358-2360
         final_shift = float(shift)
         if res_dependent_shift:
-            # Formula derived from Draw Things official app behavior
-            # Formula: shift * (1.2 + 2.0 * pixel_ratio)
-            # Verified against official values with average error of 0.12
-            base_pixels = base_resolution * base_resolution
-            target_pixels = width * height
-            pixel_ratio = target_pixels / base_pixels
-            final_shift = shift * (1.2 + 2.0 * pixel_ratio)
-            print(f"\n⚙️  Resolution-Dependent Shift Calculation:")
-            print(f"   Base: {base_resolution}x{base_resolution} = {base_pixels:,} pixels")
-            print(f"   Target: {width}x{height} = {target_pixels:,} pixels")
-            print(f"   Ratio: {pixel_ratio:.3f}")
-            print(f"   Original Shift: {shift}")
-            print(f"   → Adjusted Shift: {final_shift:.2f}")
+            # Convert to latent resolution (divide by 8 for most models)
+            latent_width = width // 8
+            latent_height = height // 8
+
+            # Total latent pixels multiplied by 16
+            resolution_factor = (latent_height * latent_width) * 16
+
+            # Official exponential formula: maps resolution to shift range 0.5-1.15
+            import math
+            calculated_shift = math.exp(
+                ((resolution_factor - 256) * (1.15 - 0.5) / (4096 - 256)) + 0.5
+            )
+
+            # If user provided a custom base shift, scale the calculated value proportionally
+            if shift != 1.0:
+                final_shift = calculated_shift * shift
+            else:
+                final_shift = calculated_shift
+
+            print(f"\n⚙️  Resolution-Dependent Shift Calculation (Official Formula):")
+            print(f"   Pixels: {width}x{height}")
+            print(f"   Latents: {latent_width}x{latent_height}")
+            print(f"   Resolution Factor: {resolution_factor}")
+            print(f"   Calculated Shift: {calculated_shift:.3f}")
+            if shift != 1.0:
+                print(f"   Base Shift Multiplier: {shift}")
+                print(f"   → Final Shift: {final_shift:.3f}")
+            else:
+                print(f"   → Final Shift: {final_shift:.3f}")
         else:
             print(f"\n⚙️  Shift: {final_shift} (no resolution adjustment)")
+
+        # High-res fix settings - convert pixels to scale units
+        hires_fix_start_width_scale = hires_fix_start_width // 64
+        hires_fix_start_height_scale = hires_fix_start_height // 64
+
+        # Validate hires fix settings
+        hires_fix_valid = False
+        if hires_fix:
+            target_width_scale = width // 64
+            target_height_scale = height // 64
+
+            if hires_fix_start_width_scale <= 0 or hires_fix_start_height_scale <= 0:
+                print(f"\n⚠️  High-Res Fix: DISABLED - Start resolution must be > 0")
+                print(f"   Hint: Set start resolution to at least 64×64 pixels")
+                hires_fix = False
+            elif hires_fix_start_width_scale >= target_width_scale or hires_fix_start_height_scale >= target_height_scale:
+                print(f"\n⚠️  High-Res Fix: DISABLED - Start resolution must be SMALLER than target")
+                print(f"   Start: {hires_fix_start_width}×{hires_fix_start_height}px ({hires_fix_start_width_scale}×{hires_fix_start_height_scale} scale)")
+                print(f"   Target: {width}×{height}px ({target_width_scale}×{target_height_scale} scale)")
+                print(f"   Hint: Either increase target resolution OR decrease start resolution")
+                hires_fix = False
+            else:
+                hires_fix_valid = True
+                print(f"\n🔧 High-Res Fix Enabled:")
+                print(f"   Start Resolution: {hires_fix_start_width}×{hires_fix_start_height}px ({hires_fix_start_width_scale}×{hires_fix_start_height_scale} scale)")
+                print(f"   Target Resolution: {width}×{height}px ({target_width_scale}×{target_height_scale} scale)")
+                print(f"   Refinement Strength: {hires_fix_strength}")
+                upscale_factor = width / hires_fix_start_width
+                print(f"   Upscale Factor: {upscale_factor:.2f}x")
+        else:
+            print(f"\n🔧 High-Res Fix: Disabled")
 
         # Calculate scale factors
         # Testing: Server seems to multiply by 64 regardless of model latent_size
@@ -633,7 +713,14 @@ def generate_image(prompt: str, model: str, lora1: str, lora1_weight: float, lor
         GenerationConfiguration.AddLoras(builder, loras_vector)
 
         # Note: ResolutionDependentShift is calculated CLIENT-SIDE above and applied to final_shift
-        # Other settings like CfgZeroStar, HiresFix are not in FlatBuffer schema
+        # HiresFix parameters (when enabled) - use scale units for FlatBuffer
+        GenerationConfiguration.AddHiresFix(builder, hires_fix)
+        if hires_fix and hires_fix_start_width_scale > 0:
+            GenerationConfiguration.AddHiresFixStartWidth(builder, hires_fix_start_width_scale)
+        if hires_fix and hires_fix_start_height_scale > 0:
+            GenerationConfiguration.AddHiresFixStartHeight(builder, hires_fix_start_height_scale)
+        if hires_fix:
+            GenerationConfiguration.AddHiresFixStrength(builder, hires_fix_strength)
 
         config = GenerationConfiguration.End(builder)
         builder.Finish(config)
@@ -736,6 +823,159 @@ def generate_image(prompt: str, model: str, lora1: str, lora1_weight: float, lor
         import traceback
         error_details = traceback.format_exc()
         return None, f"❌ Error during generation:\n{str(e)}\n\nDetails:\n{error_details}"
+
+
+def check_for_updates() -> Tuple[str, str]:
+    """
+    Check if updates are available from GitHub.
+
+    Returns:
+        Tuple[str, str]: (status_message, version_info)
+    """
+    try:
+        # Check if .git directory exists
+        git_dir = Path(__file__).parent / ".git"
+        if not git_dir.exists():
+            return ("❌ Not installed via git clone.\n\n"
+                   "To enable auto-updates, please reinstall using:\n"
+                   "git clone https://github.com/AlexTheStampede/MuddleMeThis.git",
+                   f"Current Version: {APP_VERSION}")
+
+        # Fetch latest changes from remote
+        result = subprocess.run(
+            ['git', 'fetch', 'origin', 'main'],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            cwd=Path(__file__).parent
+        )
+
+        if result.returncode != 0:
+            return (f"❌ Unable to check for updates.\n\n"
+                   f"Error: {result.stderr}\n\n"
+                   f"Please check your internet connection.",
+                   f"Current Version: {APP_VERSION}")
+
+        # Get local commit hash
+        local_result = subprocess.run(
+            ['git', 'rev-parse', 'HEAD'],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            cwd=Path(__file__).parent
+        )
+        local_commit = local_result.stdout.strip()
+
+        # Get remote commit hash
+        remote_result = subprocess.run(
+            ['git', 'rev-parse', 'origin/main'],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            cwd=Path(__file__).parent
+        )
+        remote_commit = remote_result.stdout.strip()
+
+        # Compare commits
+        if local_commit == remote_commit:
+            return ("✅ Already up to date!\n\n"
+                   "You have the latest version of MuddleMeThis.",
+                   f"Current Version: {APP_VERSION} | Status: Up to date")
+
+        # Get commit log to show what's new
+        log_result = subprocess.run(
+            ['git', 'log', '--oneline', 'HEAD..origin/main'],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            cwd=Path(__file__).parent
+        )
+
+        commit_count = len(log_result.stdout.strip().split('\n')) if log_result.stdout.strip() else 0
+        commit_list = log_result.stdout.strip()
+
+        status_msg = f"✅ Updates available!\n\n"
+        status_msg += f"New commits ({commit_count}):\n{commit_list}\n\n"
+        status_msg += "Click 'Update Now' to install updates."
+
+        return (status_msg,
+               f"Current Version: {APP_VERSION} | Updates: {commit_count} commits available")
+
+    except subprocess.TimeoutExpired:
+        return ("❌ Request timed out.\n\n"
+               "Please check your internet connection and try again.",
+               f"Current Version: {APP_VERSION}")
+    except Exception as e:
+        return (f"❌ Error checking for updates:\n{str(e)}",
+               f"Current Version: {APP_VERSION}")
+
+
+def apply_update() -> str:
+    """
+    Apply updates by running git pull.
+
+    Returns:
+        str: Status message
+    """
+    try:
+        # Check if .git directory exists
+        git_dir = Path(__file__).parent / ".git"
+        if not git_dir.exists():
+            return ("❌ Not installed via git clone.\n\n"
+                   "To enable auto-updates, please reinstall using:\n"
+                   "git clone https://github.com/AlexTheStampede/MuddleMeThis.git")
+
+        # Check for uncommitted changes (excluding settings/config.json which is gitignored)
+        status_result = subprocess.run(
+            ['git', 'status', '--porcelain'],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            cwd=Path(__file__).parent
+        )
+
+        # Filter out gitignored files (settings/config.json)
+        uncommitted_changes = [
+            line for line in status_result.stdout.strip().split('\n')
+            if line and 'settings/config.json' not in line
+        ]
+
+        if uncommitted_changes:
+            files_list = '\n'.join(uncommitted_changes)
+            return (f"❌ Update blocked: Local changes detected.\n\n"
+                   f"Modified files:\n{files_list}\n\n"
+                   f"Please backup your changes and resolve conflicts before updating.\n"
+                   f"Or run manually: git stash && git pull && git stash pop")
+
+        # Perform git pull
+        pull_result = subprocess.run(
+            ['git', 'pull', 'origin', 'main'],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=Path(__file__).parent
+        )
+
+        if pull_result.returncode != 0:
+            return (f"❌ Update failed!\n\n"
+                   f"Error: {pull_result.stderr}\n\n"
+                   f"You may need to resolve conflicts manually.\n"
+                   f"Run: git pull origin main")
+
+        # Success!
+        return ("✅ Update complete!\n\n"
+               f"Output:\n{pull_result.stdout}\n\n"
+               f"⚠️ Please restart the application to use the new version:\n"
+               f"  - Close this window\n"
+               f"  - Run: ./launch.sh (or launch.bat on Windows)\n"
+               f"  - Or: python app.py")
+
+    except subprocess.TimeoutExpired:
+        return ("❌ Update timed out.\n\n"
+               "The update process took too long. Please try again or update manually:\n"
+               "git pull origin main")
+    except Exception as e:
+        return f"❌ Error during update:\n{str(e)}\n\nTry updating manually: git pull origin main"
 
 
 # ============================================================================
@@ -973,6 +1213,47 @@ def create_ui():
 
                     # Note: We'll wire up the connection button outputs below after creating gen_model and gen_lora
 
+                with gr.Accordion("Updates", open=False):
+                    gr.Markdown("""
+                    **Git-Based Updates**
+
+                    Check for and install updates directly from GitHub. Requires installation via `git clone`.
+                    """)
+
+                    # Version and status display
+                    update_version_info = gr.Textbox(
+                        label="Version Information",
+                        value=f"Current Version: {APP_VERSION}",
+                        interactive=False,
+                        lines=2
+                    )
+
+                    # Check button
+                    update_check_btn = gr.Button("Check for Updates", size="sm")
+
+                    # Status textbox
+                    update_status = gr.Textbox(
+                        label="Status",
+                        interactive=False,
+                        lines=8
+                    )
+
+                    # Update button
+                    update_apply_btn = gr.Button("Update Now", variant="primary", size="sm")
+
+                    # Wire up update callbacks
+                    update_check_btn.click(
+                        fn=check_for_updates,
+                        inputs=[],
+                        outputs=[update_status, update_version_info]
+                    )
+
+                    update_apply_btn.click(
+                        fn=apply_update,
+                        inputs=[],
+                        outputs=[update_status]
+                    )
+
                 with gr.Accordion("System Prompts", open=False):
                     gr.Markdown(f"""
                     System prompts are loaded from the `settings/` folder:
@@ -1077,10 +1358,29 @@ def create_ui():
                     value=settings.get('default_aspect_ratio', default_aspects[4] if len(default_aspects) > 4 else default_aspects[0])
                 )
 
+                gen_resolution_scale = gr.Dropdown(
+                    label="Resolution Scale",
+                    choices=["0.5x", "1x", "1.5x", "2x", "2.5x", "3x", "4x"],
+                    value="1x",
+                    info="Multiply aspect ratio resolution (useful for high-res fix)"
+                )
+
                 gen_seed = gr.Number(
                     label="Seed (-1 for random)",
                     value=-1,
                     precision=0
+                )
+
+                # Load negative prompt presets
+                negative_prompt_presets = settings.load_negative_prompts()
+                negative_prompt_choices = sorted(negative_prompt_presets.keys())
+
+                gen_negative_preset = gr.Dropdown(
+                    label="Negative Prompt Preset",
+                    choices=negative_prompt_choices,
+                    value=None,
+                    interactive=True,
+                    info="Quick select common negative prompts"
                 )
 
                 gen_negative = gr.Textbox(
@@ -1119,9 +1419,34 @@ def create_ui():
                         info="Random seed generation mode (2 is default)"
                     )
 
+                    # High-Res Fix settings
+                    gen_hires = gr.Checkbox(
+                        value=False,
+                        label="Enable High-Res Fix",
+                        info="Two-pass generation: low-res composition + high-res refinement (better quality)"
+                    )
+
+                    with gr.Row(visible=False) as gen_hires_row:
+                        gen_hires_start_width = gr.Number(
+                            value=512,
+                            label="Start Width (pixels)",
+                            info="Starting width for first pass (e.g., 512px for SD 1.5)",
+                            step=64
+                        )
+                        gen_hires_start_height = gr.Number(
+                            value=512,
+                            label="Start Height (pixels)",
+                            info="Starting height for first pass (e.g., 512px for SD 1.5)",
+                            step=64
+                        )
+                        gen_hires_strength = gr.Slider(
+                            0.0, 1.0, 0.7,
+                            label="Refinement Strength",
+                            info="How much to modify in second pass (0.7 recommended)"
+                        )
+
                     # Hidden placeholders for removed settings (kept for preset compatibility)
                     gen_cfg_zero = gr.Checkbox(value=False, visible=False)
-                    gen_hires = gr.Checkbox(value=False, visible=False)
 
                 gen_btn = gr.Button("🎨 Generate Image", variant="primary", size="lg")
 
@@ -1141,15 +1466,31 @@ def create_ui():
             fn=on_preset_selected,
             inputs=[gen_preset],
             outputs=[gen_steps, gen_cfg, gen_preset_info, gen_sampler,
-                    gen_shift, gen_res_shift, gen_seed_mode, gen_cfg_zero, gen_hires, gen_clip_skip]
+                    gen_shift, gen_res_shift, gen_seed_mode, gen_cfg_zero, gen_hires,
+                    gen_hires_start_width, gen_hires_start_height, gen_hires_strength, gen_clip_skip]
+        )
+
+        # Toggle hires fix controls visibility
+        gen_hires.change(
+            fn=lambda enabled: gr.update(visible=enabled),
+            inputs=[gen_hires],
+            outputs=[gen_hires_row]
+        )
+
+        # Negative prompt preset selection
+        gen_negative_preset.change(
+            fn=on_negative_prompt_preset_selected,
+            inputs=[gen_negative_preset],
+            outputs=[gen_negative]
         )
 
         # Connect outputs to generation
         gen_btn.click(
             fn=generate_image,
             inputs=[gen_prompt, gen_model, gen_lora1, gen_lora1_weight, gen_lora2, gen_lora2_weight,
-                   gen_steps, gen_cfg, gen_sampler, gen_aspect, gen_seed, gen_negative,
-                   gen_shift, gen_res_shift, gen_seed_mode, gen_cfg_zero, gen_hires, gen_clip_skip],
+                   gen_steps, gen_cfg, gen_sampler, gen_aspect, gen_resolution_scale, gen_seed, gen_negative,
+                   gen_shift, gen_res_shift, gen_seed_mode, gen_cfg_zero, gen_hires,
+                   gen_hires_start_width, gen_hires_start_height, gen_hires_strength, gen_clip_skip],
             outputs=[gen_image, gen_status]
         )
 

@@ -52,13 +52,18 @@ MuddleMeThis/
 │   ├── extract.txt               # System prompt for extraction
 │   ├── refine.txt                # System prompt for refinement
 │   ├── aspectratio.txt           # Aspect ratio definitions
-│   └── presets/                  # Model presets (JSON)
-│       ├── flux_official.json
-│       ├── schnell_official.json
-│       ├── ponysdxl_official.json
-│       ├── sd15_official.json
-│       ├── qwenimage_official.json
-│       └── chroma_official.json
+│   ├── presets/                  # Model presets (JSON)
+│   │   ├── flux_official.json
+│   │   ├── schnell_official.json
+│   │   ├── ponysdxl_official.json
+│   │   ├── sd15_official.json
+│   │   ├── qwenimage_official.json
+│   │   └── chroma_official.json
+│   └── negative_prompts/         # Negative prompt presets (JSON)
+│       ├── realistic_quality.json
+│       ├── anime_pony.json
+│       ├── simple.json
+│       └── none.json
 ├── dev/
 │   ├── DTgRPCconnector/          # Draw Things gRPC Python client
 │   ├── ModuLLe/                  # LLM provider abstraction layer
@@ -84,10 +89,17 @@ A Python client library for Draw Things gRPC server enabling programmatic image 
   - Universal formula: `scale_factor = desired_pixels ÷ 64`
   - All models: 512px → scale=8, 1024px → scale=16, 1536px → scale=24
   - SDXL workaround: Use `÷ 64` even though latent_size is 128
-- **Resolution-Dependent Shift**: Client-side calculation for optimal quality
-  - Formula: `adjusted_shift = base_shift × (1.2 + 2.0 × pixel_ratio)`
-  - Where: `pixel_ratio = (target_width × target_height) / (base_resolution²)`
-  - Derived from official Draw Things app behavior via linear regression
+- **Resolution-Dependent Shift**: Client-side calculation using official exponential formula
+  - Formula: `shift = exp(((resolution_factor - 256) * (1.15 - 0.5) / (4096 - 256)) + 0.5)`
+  - Where: `resolution_factor = (latent_h * latent_w) * 16`
+  - Maps resolution to shift range 0.5-1.15 exactly as in official Draw Things app
+  - Source: ModelZoo.swift:2358-2360 from official Draw Things app
+- **High-Res Fix**: Two-pass generation for better quality at high resolutions
+  - First pass: Generate at lower resolution (e.g., 512×512 for SD 1.5)
+  - Upscale: Scale latent to target resolution
+  - Second pass: Refine at target resolution with img2img (strength typically 0.7)
+  - Parameters: `hiresFixStartWidth`, `hiresFixStartHeight` (in scale units), `hiresFixStrength`
+  - UI shows pixels; internally converted to scale units (pixels ÷ 64)
 - **Automatic Detection**: Client queries server metadata to determine correct latent_size for each model
 - **CLIP Skip**: Critical parameter - SD 1.5 needs clip_skip=1, Pony/Illustrious need clip_skip=2
 - **Dual LoRA Support**: Up to 2 LoRAs simultaneously with independent weight control (0.0-2.0)
@@ -182,7 +194,10 @@ description = vision_processor.analyze_image(
 - **Multi-Provider LLM**: Supports both LM Studio and Ollama with automatic model discovery
 - **Separate Vision Models**: Independent text and vision model selection (supports Qwen3-VL, LLaVA, Llama Vision, etc.)
 - **Dual LoRA Support**: Use up to 2 LoRAs simultaneously with adjustable weights
-- **Resolution-Dependent Shift**: Automatic shift adjustment based on target resolution
+- **High-Res Fix**: Two-pass generation (512→1024 for SD 1.5) with configurable start resolution and refinement strength
+- **Resolution Scale Multiplier**: Scale any aspect ratio by 0.5x-4x for flexible output sizes
+- **Resolution-Dependent Shift**: Official exponential formula from Draw Things (ModelZoo.swift)
+- **Negative Prompt Presets**: Quick-select common negative prompts (Realistic, Anime/Pony, Simple, None)
 - **Official Presets**: 6 official Draw Things presets (FLUX, Schnell, Pony, SDXL, SD1.5, Qwen, Chroma)
 - **Auto-Save**: Images saved with descriptive filenames and comprehensive PNG metadata
 - **Generation Timing**: Track how long each image takes to generate
@@ -256,6 +271,66 @@ Access at: **http://localhost:7860**
    - Select text and vision models
    - Connect to gRPC server
    - Select generation model
+
+## Updating the Application
+
+MuddleMeThis includes built-in git-based auto-update functionality. This requires that you installed via `git clone` (the recommended installation method).
+
+### Using the Built-In Updater
+
+1. **Open the Settings Tab**:
+   - Navigate to the Settings tab in the web interface
+   - Click the "Updates" accordion to expand it
+
+2. **Check for Updates**:
+   - Click the "Check for Updates" button
+   - The system will check GitHub for new commits
+   - Status will show either:
+     - "✅ Already up to date!" - You have the latest version
+     - "✅ Updates available! New commits (X)" - Updates are ready to install
+
+3. **Install Updates**:
+   - If updates are available, click the "Update Now" button
+   - The system will run `git pull` to fetch and apply updates
+   - User settings (`settings/config.json`) are preserved (gitignored)
+   - On success, you'll see: "✅ Update complete!"
+
+4. **Restart the Application**:
+   - Close the browser window
+   - Stop the server (Ctrl+C in terminal)
+   - Restart using `./launch.sh` or `python app.py`
+
+### Manual Updates (Alternative)
+
+If you prefer to update manually via command line:
+
+```bash
+# Pull latest changes
+git pull origin main
+
+# Update dependencies if needed
+pip install -r requirements.txt
+
+# Restart the application
+./launch.sh
+```
+
+### Troubleshooting
+
+**"Not installed via git clone" Error:**
+- You downloaded the code as a ZIP instead of cloning it
+- To enable auto-updates, reinstall using: `git clone https://github.com/AlexTheStampede/MuddleMeThis.git`
+
+**"Local changes detected" Error:**
+- You have uncommitted modifications to files
+- Either:
+  - Backup your changes and resolve conflicts
+  - Or run manually: `git stash && git pull && git stash pop`
+
+**Network/Connection Errors:**
+- Check your internet connection
+- Verify you can reach GitHub: `ping github.com`
+- Try updating manually: `git pull origin main`
 
 ## Common Tasks
 

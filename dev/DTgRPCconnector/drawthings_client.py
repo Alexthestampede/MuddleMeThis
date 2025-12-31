@@ -91,6 +91,9 @@ class ImageGenerationConfig:
         face_restoration: Face restoration model (optional)
         refiner_model: Refiner model name (optional)
         hires_fix: Enable hires fix
+        hires_fix_start_width: Hires fix starting width in scale units (NOT pixels!)
+        hires_fix_start_height: Hires fix starting height in scale units (NOT pixels!)
+        hires_fix_strength: Hires fix strength (0.0-1.0, typically 0.7)
         tiled_decoding: Enable tiled decoding
         tiled_diffusion: Enable tiled diffusion
         mask_blur: Mask blur amount
@@ -118,6 +121,9 @@ class ImageGenerationConfig:
     face_restoration: str = ""
     refiner_model: str = ""
     hires_fix: bool = False
+    hires_fix_start_width: int = 0
+    hires_fix_start_height: int = 0
+    hires_fix_strength: float = 0.7
     tiled_decoding: bool = False
     tiled_diffusion: bool = False
     mask_blur: float = 2.5
@@ -187,6 +193,12 @@ class ImageGenerationConfig:
         if refiner_model_offset:
             GenerationConfiguration.AddRefinerModel(builder, refiner_model_offset)
         GenerationConfiguration.AddHiresFix(builder, self.hires_fix)
+        if self.hires_fix and self.hires_fix_start_width > 0:
+            GenerationConfiguration.AddHiresFixStartWidth(builder, self.hires_fix_start_width)
+        if self.hires_fix and self.hires_fix_start_height > 0:
+            GenerationConfiguration.AddHiresFixStartHeight(builder, self.hires_fix_start_height)
+        if self.hires_fix:
+            GenerationConfiguration.AddHiresFixStrength(builder, self.hires_fix_strength)
         GenerationConfiguration.AddMaskBlur(builder, self.mask_blur)
         GenerationConfiguration.AddMaskBlurOutset(builder, self.mask_blur_outset)
         GenerationConfiguration.AddSharpness(builder, self.sharpness)
@@ -233,6 +245,9 @@ class DrawThingsClient:
 
         # Channel options for compression and keep-alive
         options = [
+            # Message size limits (increased for large images)
+            ('grpc.max_send_message_length', 32 * 1024 * 1024),  # 32MB max send
+            ('grpc.max_receive_message_length', 32 * 1024 * 1024),  # 32MB max receive
             # Keep-alive settings to prevent connection drops during long operations
             ('grpc.keepalive_time_ms', 30000),  # Send keepalive ping every 30 seconds
             ('grpc.keepalive_timeout_ms', 10000),  # Wait 10 seconds for keepalive response

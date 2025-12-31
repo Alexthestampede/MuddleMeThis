@@ -1,0 +1,5 @@
+{
+  "name": "Simple",
+  "description": "Basic negative prompts focusing on core quality issues",
+  "negative_prompt": "blurry, low quality, ugly, bad anatomy, deformed"
+}

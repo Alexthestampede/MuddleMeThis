@@ -1,0 +1,5 @@
+{
+  "name": "Realistic Quality",
+  "description": "General quality negative prompts for realistic/photorealistic models",
+  "negative_prompt": "blurry, low quality, low resolution, pixelated, jpeg artifacts, watermark, signature, text, bad anatomy, deformed, disfigured, mutated, ugly, distorted, amateur"
+}

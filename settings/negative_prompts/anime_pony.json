@@ -1,0 +1,5 @@
+{
+  "name": "Anime/Pony Quality",
+  "description": "Negative prompts optimized for anime-style models (Pony, NAI, etc.)",
+  "negative_prompt": "low quality, worst quality, lowres, bad anatomy, bad hands, text, error, missing fingers, extra digit, fewer digits, cropped, worst quality, low quality, normal quality, jpeg artifacts, signature, watermark, username, blurry, artist name, poorly drawn"
+}

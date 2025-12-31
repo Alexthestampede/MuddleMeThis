@@ -17,10 +17,12 @@ class SettingsManager:
         self.config_file = self.settings_dir / "config.json"
         self.config_example = self.settings_dir / "config.example.json"
         self.presets_dir = self.settings_dir / "presets"
+        self.negative_prompts_dir = self.settings_dir / "negative_prompts"
 
         # Ensure directories exist
         self.settings_dir.mkdir(exist_ok=True)
         self.presets_dir.mkdir(exist_ok=True)
+        self.negative_prompts_dir.mkdir(exist_ok=True)
 
         # Load or create config
         self.config = self.load_config()
@@ -156,6 +158,30 @@ class SettingsManager:
                 print(f"Warning: Failed to load preset {preset_file}: {e}")
 
         return presets
+
+    def load_negative_prompts(self) -> Dict[str, Dict]:
+        """Load all negative prompt presets from negative_prompts/ folder
+
+        Returns:
+            Dict mapping preset names to their configurations
+        """
+        negative_prompts = {}
+
+        if not self.negative_prompts_dir.exists():
+            return negative_prompts
+
+        for preset_file in self.negative_prompts_dir.glob("*.json"):
+            try:
+                with open(preset_file, 'r') as f:
+                    preset_data = json.load(f)
+
+                    # Use filename (without .json) as key if no name in file
+                    preset_name = preset_data.get('name', preset_file.stem)
+                    negative_prompts[preset_name] = preset_data
+            except Exception as e:
+                print(f"Warning: Failed to load negative prompt preset {preset_file}: {e}")
+
+        return negative_prompts
 
     def get_model_preset(self, model_name: str) -> Optional[Dict]:
         """Get preset for a specific model

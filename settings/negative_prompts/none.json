@@ -1,0 +1,5 @@
+{
+  "name": "None",
+  "description": "No negative prompt (for models that work better without one, like FLUX)",
+  "negative_prompt": ""
+}

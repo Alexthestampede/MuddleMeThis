@@ -188,6 +188,25 @@ def GenerationConfigurationAddHiresFix(builder, hiresFix):
 def AddHiresFix(builder, hiresFix):
     GenerationConfigurationAddHiresFix(builder, hiresFix)
 
+# Manually added hires fix parameters (not in auto-generated code)
+def GenerationConfigurationAddHiresFixStartWidth(builder, hiresFixStartWidth):
+    builder.PrependUint16Slot(12, hiresFixStartWidth, 0)
+
+def AddHiresFixStartWidth(builder, hiresFixStartWidth):
+    GenerationConfigurationAddHiresFixStartWidth(builder, hiresFixStartWidth)
+
+def GenerationConfigurationAddHiresFixStartHeight(builder, hiresFixStartHeight):
+    builder.PrependUint16Slot(13, hiresFixStartHeight, 0)
+
+def AddHiresFixStartHeight(builder, hiresFixStartHeight):
+    GenerationConfigurationAddHiresFixStartHeight(builder, hiresFixStartHeight)
+
+def GenerationConfigurationAddHiresFixStrength(builder, hiresFixStrength):
+    builder.PrependFloat32Slot(14, hiresFixStrength, 0.0)
+
+def AddHiresFixStrength(builder, hiresFixStrength):
+    GenerationConfigurationAddHiresFixStrength(builder, hiresFixStrength)
+
 def GenerationConfigurationAddUpscaler(builder, upscaler):
     builder.PrependUOffsetTRelativeSlot(15, flatbuffers.number_types.UOffsetTFlags.py_type(upscaler), 0)
 
