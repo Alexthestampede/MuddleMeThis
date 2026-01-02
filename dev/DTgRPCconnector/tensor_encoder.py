@@ -34,10 +34,13 @@ def encode_image_to_tensor(image_path: str, compress: bool = True) -> bytes:
 
     height, width, channels = img_array.shape
 
-    # Convert from uint8 [0, 255] to float16 [-1, 1]
-    # Reverse of: uint8 = (float16 + 1) × 127
+    # Convert from uint8 [0, 255] to float32 [-1, 1]
+    # Note: fpzip requires float32, NOT float16
     float_array = (img_array.astype(np.float32) / 127.0) - 1.0
-    float_array = float_array.astype(np.float16)
+
+    # Add batch dimension: (H, W, 3) -> (1, H, W, 3)
+    # fpzip expects/produces tensors with batch dimension
+    float_array = np.expand_dims(float_array, axis=0)
 
     # Create header (68 bytes)
     header = bytearray(68)
@@ -53,10 +56,12 @@ def encode_image_to_tensor(image_path: str, compress: bool = True) -> bytes:
 
     # Compress or append pixel data
     if compress:
-        # fpzip compression
+        # fpzip compression (requires float32)
         pixel_data = fpzip.compress(float_array, order='C')
     else:
-        pixel_data = float_array.tobytes()
+        # For uncompressed, convert to float16 to save space
+        float16_array = float_array.astype(np.float16)
+        pixel_data = float16_array.tobytes()
 
     return bytes(header) + pixel_data
 

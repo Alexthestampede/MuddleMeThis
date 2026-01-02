@@ -28,6 +28,7 @@
   "faceRestoration": "",
   "causalInferencePad": 0,
   "clip_skip": 1,
+  "teaCache": false,
   "loras": [],
   "controls": [],
   "notes": "For Stable Diffusion 1.5 and 2.x models"

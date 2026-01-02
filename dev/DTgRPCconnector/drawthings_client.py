@@ -103,6 +103,7 @@ class ImageGenerationConfig:
         cfg_zero_star: Enable CFG zero star
         cfg_zero_init_steps: CFG zero initialization steps
         causal_inference_pad: Causal inference padding
+        tea_cache: Enable TeaCache acceleration (timestep embedding aware cache)
     """
     model: str
     steps: int
@@ -133,6 +134,7 @@ class ImageGenerationConfig:
     cfg_zero_star: bool = False
     cfg_zero_init_steps: int = 0
     causal_inference_pad: int = 0
+    tea_cache: bool = False
 
     def __post_init__(self):
         """Generate random seed if not provided."""
@@ -208,6 +210,7 @@ class ImageGenerationConfig:
         GenerationConfiguration.AddCfgZeroStar(builder, self.cfg_zero_star)
         GenerationConfiguration.AddCfgZeroInitSteps(builder, self.cfg_zero_init_steps)
         GenerationConfiguration.AddCausalInferencePad(builder, self.causal_inference_pad)
+        GenerationConfiguration.AddTeaCache(builder, self.tea_cache)
 
         config = GenerationConfiguration.End(builder)
 

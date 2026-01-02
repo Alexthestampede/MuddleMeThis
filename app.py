@@ -88,7 +88,7 @@ def init_llm(server_url: str, model_name: str, vision_model_name: str, provider:
     """Initialize LLM connection and fetch available models"""
     try:
         if not MODULLE_AVAILABLE:
-            return "❌ ModuLLe not installed", gr.Dropdown(choices=[]), gr.Dropdown(choices=[])
+            return "❌ ModuLLe not installed", gr.update(choices=[]), gr.update(choices=[])
 
         # Map provider names to ModuLLe provider strings
         provider_map = {
@@ -135,11 +135,11 @@ def init_llm(server_url: str, model_name: str, vision_model_name: str, provider:
         if available_models:
             status += f"\n\nFound {len(available_models)} model(s)"
 
-        models_dropdown = gr.Dropdown(choices=available_models, value=model_name if model_name else None)
-        vision_dropdown = gr.Dropdown(choices=available_models, value=vision_model_name if vision_model_name else None)
+        models_dropdown = gr.update(choices=available_models, value=model_name if model_name else None)
+        vision_dropdown = gr.update(choices=available_models, value=vision_model_name if vision_model_name else None)
         return status, models_dropdown, vision_dropdown
     except Exception as e:
-        return f"❌ LLM connection failed: {str(e)}", gr.Dropdown(choices=[]), gr.Dropdown(choices=[])
+        return f"❌ LLM connection failed: {str(e)}", gr.update(choices=[]), gr.update(choices=[])
 
 
 def expand_prompt(user_prompt: str) -> str:
@@ -234,7 +234,7 @@ def init_grpc(server_url: str) -> Tuple[str, gr.Dropdown, gr.Dropdown]:
     """Initialize gRPC connection and fetch models/LoRAs"""
     try:
         if not GRPC_AVAILABLE:
-            return "❌ DTgRPCconnector not installed", gr.Dropdown(choices=[]), gr.Dropdown(choices=[])
+            return "❌ DTgRPCconnector not installed", gr.update(choices=[]), gr.update(choices=[])
 
         # Update settings
         settings.update_config(grpc_server=server_url)
@@ -331,17 +331,17 @@ def init_grpc(server_url: str) -> Tuple[str, gr.Dropdown, gr.Dropdown]:
         lora_choices = ["None"] + loras
 
         # Return updated dropdowns - they'll be used to update both settings and generation sections
-        return status, gr.Dropdown(choices=models, value=models[0] if models else None), gr.Dropdown(choices=lora_choices, value="None")
+        return status, gr.update(choices=models, value=models[0] if models else None), gr.update(choices=lora_choices, value="None")
     except Exception as e:
         import traceback
         error_details = traceback.format_exc()
-        return f"❌ gRPC connection failed: {str(e)}\n\nDetails:\n{error_details}", gr.Dropdown(choices=[]), gr.Dropdown(choices=[])
+        return f"❌ gRPC connection failed: {str(e)}\n\nDetails:\n{error_details}", gr.update(choices=[]), gr.update(choices=[])
 
 
 def on_model_selected(model_name: str) -> Tuple[gr.Dropdown, str, gr.Dropdown]:
     """When a model is selected, get base resolution and update aspect ratios"""
     if not model_name or not state.grpc_metadata:
-        return gr.Dropdown(choices=[]), "", gr.Dropdown(choices=[])
+        return gr.update(choices=[]), "", gr.update(choices=[])
 
     # Translate display name to actual filename
     model_file = state.model_name_to_file.get(model_name, model_name)
@@ -382,10 +382,11 @@ def on_model_selected(model_name: str) -> Tuple[gr.Dropdown, str, gr.Dropdown]:
 
     info = f"Model loaded: {model_name}\nBase resolution: {base_resolution}px"
 
+    # Use gr.update() to properly update dropdown choices
     return (
-        gr.Dropdown(choices=preset_choices, value="Custom (no preset)"),
+        gr.update(choices=preset_choices, value="Custom (no preset)"),
         info,
-        gr.Dropdown(choices=aspect_choices, value=aspect_choices[4] if len(aspect_choices) > 4 else aspect_choices[0])
+        gr.update(choices=aspect_choices, value=aspect_choices[4] if len(aspect_choices) > 4 else aspect_choices[0])
     )
 
 
@@ -416,11 +417,12 @@ SAMPLER_NAMES = list(SAMPLERS.keys())
 SAMPLER_DEFAULT = "DPM++ 2M Karras"  # Index 0, universally supported
 
 
-def on_preset_selected(preset_name: str) -> Tuple[int, float, str, str, float, bool, int, bool, bool, int]:
+def on_preset_selected(preset_name: str) -> Tuple[int, float, str, str, float, bool, int, bool, bool, int, int, float, int, bool]:
     """When a preset is selected, apply its settings"""
     if preset_name == "Custom (no preset)" or not preset_name:
         return (gr.update(), gr.update(), "Using custom settings",
-                gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update())
+                gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(),
+                gr.update(), gr.update(), gr.update(), gr.update())
 
     preset = settings.get_model_preset(preset_name)
     if preset:
@@ -447,16 +449,17 @@ def on_preset_selected(preset_name: str) -> Tuple[int, float, str, str, float, b
         hires_fix_start_height = preset.get('hiresFixStartHeight', 0) * 64
         hires_fix_strength = preset.get('hiresFixStrength', 0.7)
         clip_skip = preset.get('clip_skip', 1)  # Pony needs 2, most others need 1
+        tea_cache = preset.get('teaCache', False)
 
         notes = preset.get('notes', '')
         info = f"✅ Preset applied: {preset.get('name', 'Unknown')}\n{notes}"
 
         return (steps, cfg, info, sampler_name, shift, res_shift, seed_mode, cfg_zero,
-                hires_fix, hires_fix_start_width, hires_fix_start_height, hires_fix_strength, clip_skip)
+                hires_fix, hires_fix_start_width, hires_fix_start_height, hires_fix_strength, clip_skip, tea_cache)
     else:
         return (gr.update(), gr.update(), f"⚠️ Preset not found: {preset_name}",
                 gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(),
-                gr.update(), gr.update(), gr.update(), gr.update())
+                gr.update(), gr.update(), gr.update(), gr.update(), gr.update())
 
 
 def on_negative_prompt_preset_selected(preset_name: str) -> str:
@@ -477,7 +480,7 @@ def generate_image(prompt: str, model: str, lora1: str, lora1_weight: float, lor
                   seed: int, negative_prompt: str,
                   shift: float, res_dependent_shift: bool, seed_mode: int,
                   cfg_zero_star: bool, hires_fix: bool, hires_fix_start_width: int, hires_fix_start_height: int,
-                  hires_fix_strength: float, clip_skip: int, progress=gr.Progress()):
+                  hires_fix_strength: float, clip_skip: int, tea_cache: bool, progress=gr.Progress()):
     """Generate image using Draw Things gRPC with progress tracking"""
     if not state.grpc_client:
         return None, "❌ gRPC not initialized. Configure in Settings tab first."
@@ -722,6 +725,9 @@ def generate_image(prompt: str, model: str, lora1: str, lora1_weight: float, lor
         if hires_fix:
             GenerationConfiguration.AddHiresFixStrength(builder, hires_fix_strength)
 
+        # Performance optimizations
+        GenerationConfiguration.AddTeaCache(builder, tea_cache)
+
         config = GenerationConfiguration.End(builder)
         builder.Finish(config)
         config_bytes = bytes(builder.Output())
@@ -823,6 +829,260 @@ def generate_image(prompt: str, model: str, lora1: str, lora1_weight: float, lor
         import traceback
         error_details = traceback.format_exc()
         return None, f"❌ Error during generation:\n{str(e)}\n\nDetails:\n{error_details}"
+
+
+def edit_image(input_image, instruction: str, model: str, steps: int, cfg_scale: float,
+               sampler_name: str, strength: float, lora1: str, lora1_weight: float,
+               lora2: str, lora2_weight: float, negative_prompt: str, seed: int,
+               clip_skip: int, shift: float, res_dependent_shift: bool, progress=gr.Progress()) -> Tuple[any, str]:
+    """Edit an image using AI instructions (img2img with edit models like Qwen Edit)"""
+    if not state.grpc_client:
+        return None, "❌ gRPC not initialized. Configure in Settings tab first."
+
+    if input_image is None:
+        return None, "❌ No input image provided"
+
+    if not instruction or not instruction.strip():
+        return None, "❌ No edit instruction provided"
+
+    if not model:
+        return None, "❌ No model selected"
+
+    # Import tensor encoding functions
+    from PIL import Image
+    import hashlib
+    import time
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent / 'dev' / 'DTgRPCconnector'))
+    from tensor_encoder import encode_image_to_tensor
+    from tensor_decoder import tensor_to_pil
+
+    start_time = time.time()
+
+    try:
+        # Convert numpy array to PIL Image
+        pil_img = Image.fromarray(input_image.astype('uint8'), 'RGB')
+
+        # Translate display name to actual filename
+        model_file = state.model_name_to_file.get(model, model)
+        print(f"[DEBUG] Edit: Model display='{model}' → file='{model_file}'")
+
+        status = f"🎨 Editing image...\n\n"
+        status += f"📝 Instruction: {instruction}\n"
+        status += f"🤖 Model: {model}\n"
+        status += f"⚙️  Steps: {steps}, CFG: {cfg_scale}\n"
+        status += f"🎲 Sampler: {sampler_name}\n"
+        status += f"💪 Strength: {strength}"
+
+        # Add warning if strength might cause issues
+        if strength == 1.0:
+            status += " ⚠️ HIGH - may ignore input (try 0.7-0.8 if image is ignored)\n"
+        elif strength < 0.5:
+            status += " (subtle edit)\n"
+        else:
+            status += " (moderate edit)\n"
+
+        status += f"📐 Input: {pil_img.width}×{pil_img.height} pixels\n\n"
+
+        progress(0.1, desc="Encoding input image...")
+
+        # Save PIL image temporarily to encode it
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+            pil_img.save(tmp.name)
+            tensor_bytes = encode_image_to_tensor(tmp.name, compress=True)
+            Path(tmp.name).unlink()  # Clean up temp file
+
+        # Calculate SHA256 hash
+        hash_digest = hashlib.sha256(tensor_bytes).digest()
+        hash_hex = hash_digest.hex()
+
+        status += f"📦 Encoded: {len(tensor_bytes):,} bytes\n"
+        status += f"🔑 Hash: {hash_hex[:16]}...\n\n"
+
+        # Debug: verify hash calculation
+        print(f"[DEBUG] Tensor size: {len(tensor_bytes)} bytes")
+        print(f"[DEBUG] SHA256: {hash_hex}")
+        print(f"[DEBUG] Hash length: {len(hash_digest)} bytes (should be 32)")
+        print(f"[DEBUG] Sending image field: {len(hash_digest)} bytes")
+        print(f"[DEBUG] Sending contents: 1 item of {len(tensor_bytes)} bytes")
+
+        progress(0.2, desc="Building configuration...")
+
+        # Build FlatBuffer configuration
+        builder = flatbuffers.Builder(2048)
+        model_offset = builder.CreateString(model_file)
+
+        # Build LoRAs (supports 0, 1, or 2 LoRAs)
+        lora_offsets = []
+        for lora_name, lora_weight in [(lora1, lora1_weight), (lora2, lora2_weight)]:
+            if lora_name and lora_name != "None" and lora_name.strip():
+                # Translate display name to filename
+                if hasattr(state, 'lora_name_to_file') and state.lora_name_to_file:
+                    lora_file = state.lora_name_to_file.get(lora_name, lora_name)
+                else:
+                    lora_file = lora_name
+
+                status += f"🎨 LoRA: {lora_name} (weight: {lora_weight})\n"
+
+                lora_file_offset = builder.CreateString(lora_file)
+                LoRA.Start(builder)
+                LoRA.AddFile(builder, lora_file_offset)
+                LoRA.AddWeight(builder, lora_weight)
+                lora_offsets.append(LoRA.End(builder))
+
+        # Build loras vector
+        GenerationConfiguration.StartLorasVector(builder, len(lora_offsets))
+        for lora_offset in reversed(lora_offsets):
+            builder.PrependUOffsetTRelative(lora_offset)
+        loras_vector = builder.EndVector()
+
+        # Empty controls vector
+        GenerationConfiguration.StartControlsVector(builder, 0)
+        controls_vector = builder.EndVector()
+
+        # Build configuration (img2img mode with strength)
+        # IMPORTANT: Calculate separate scales for width and height to preserve aspect ratio
+        scale_width = pil_img.width // 64
+        scale_height = pil_img.height // 64
+
+        # Get sampler ID from name
+        sampler_id = SAMPLERS.get(sampler_name, 0)
+
+        # Handle seed (-1 = random)
+        actual_seed = seed if seed >= 0 else random_module.randint(0, 2**32 - 1)
+
+        # Calculate resolution-dependent shift if enabled (FLUX models)
+        if res_dependent_shift:
+            import math
+            latent_h = scale_height
+            latent_w = scale_width
+            resolution_factor = (latent_h * latent_w) * 16
+            final_shift = math.exp(((resolution_factor - 256) * (1.15 - 0.5) / (4096 - 256)) + 0.5)
+            status += f"📐 Resolution-dependent shift: {final_shift:.3f}\n"
+        else:
+            final_shift = shift
+
+        status += f"⚙️ Config: {scale_width}×{scale_height} scale units\n"
+        status += f"   Seed: {actual_seed}, Shift: {final_shift:.3f}\n"
+        status += f"   CLIP Skip: {clip_skip}, LoRAs: {len(lora_offsets)}\n\n"
+
+        # Debug: log full configuration
+        print(f"[DEBUG] Config: model={model_file}, steps={steps}, cfg={cfg_scale}, strength={strength}")
+        print(f"[DEBUG] Sampler: {sampler_name} (id={sampler_id}), shift={final_shift}")
+        print(f"[DEBUG] Resolution: {scale_width}×{scale_height} scale units ({pil_img.width}×{pil_img.height} pixels)")
+
+        GenerationConfiguration.Start(builder)
+        GenerationConfiguration.AddId(builder, 0)
+        GenerationConfiguration.AddStartWidth(builder, scale_width)
+        GenerationConfiguration.AddStartHeight(builder, scale_height)
+        GenerationConfiguration.AddSeed(builder, actual_seed)
+        GenerationConfiguration.AddSteps(builder, steps)
+        GenerationConfiguration.AddGuidanceScale(builder, cfg_scale)
+        GenerationConfiguration.AddStrength(builder, strength)  # IMG2IMG strength
+        GenerationConfiguration.AddModel(builder, model_offset)
+        GenerationConfiguration.AddSampler(builder, sampler_id)
+        GenerationConfiguration.AddBatchCount(builder, 1)
+        GenerationConfiguration.AddBatchSize(builder, 1)
+        GenerationConfiguration.AddControls(builder, controls_vector)
+        GenerationConfiguration.AddLoras(builder, loras_vector)
+        GenerationConfiguration.AddShift(builder, final_shift)
+        GenerationConfiguration.AddSeedMode(builder, 2)
+        GenerationConfiguration.AddClipSkip(builder, clip_skip)
+
+        config = GenerationConfiguration.End(builder)
+        builder.Finish(config)
+        config_bytes = bytes(builder.Output())
+
+        # Create gRPC request with image
+        # Note: For edit models like Qwen Edit, we only send the prompt (instruction)
+        # The negative prompt is intentionally omitted as edit models don't use it the same way
+        request = imageService_pb2.ImageGenerationRequest(
+            image=hash_digest,  # SHA256 reference
+            prompt=instruction,  # Edit instruction
+            configuration=config_bytes,
+            scaleFactor=1,
+            user='MuddleMeThis',
+            device=imageService_pb2.LAPTOP,
+            contents=[tensor_bytes],  # Actual image data
+            chunked=False
+        )
+
+        print(f"[DEBUG] Request created: prompt='{instruction[:50]}...', image_hash={hash_hex[:16]}..., contents={len(request.contents)} items")
+
+        status += "📡 Sending to server...\n"
+        progress(0.3, desc="Sending image + instruction...")
+
+        # Generate with tracking
+        generated_images = []
+        image_was_encoded = False
+        for response in state.grpc_client.stub.GenerateImage(request):
+            if response.HasField('currentSignpost'):
+                signpost = response.currentSignpost
+                if signpost.HasField('sampling'):
+                    current_step = signpost.sampling.step
+                    progress(0.3 + (current_step / steps) * 0.6, desc=f"Editing: step {current_step}/{steps}")
+                elif signpost.HasField('textEncoded'):
+                    progress(0.35, desc="Text encoded")
+                elif signpost.HasField('imageEncoded'):
+                    image_was_encoded = True
+                    status += "✅ Server received input image\n"
+                    progress(0.40, desc="Input image encoded ✓")
+                elif signpost.HasField('imageDecoded'):
+                    progress(0.98, desc="Result decoded")
+
+            if response.generatedImages:
+                generated_images.extend(response.generatedImages)
+
+        if generated_images:
+            progress(0.99, desc="Decoding result...")
+
+            # Decode tensor to PIL Image
+            edited_pil = tensor_to_pil(generated_images[0])
+
+            # Calculate generation time
+            elapsed = time.time() - start_time
+
+            # Save to outputs
+            outputs_dir = Path("outputs")
+            outputs_dir.mkdir(exist_ok=True)
+
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            safe_instruction = instruction[:50].replace(' ', '_').replace('/', '_')
+            filename = f"edit_{timestamp}_{safe_instruction}.png"
+            filepath = outputs_dir / filename
+
+            # Save with metadata
+            metadata = PngInfo()
+            metadata.add_text("prompt", instruction)
+            metadata.add_text("strength", str(strength))
+            metadata.add_text("model", model)
+            metadata.add_text("steps", str(steps))
+            metadata.add_text("cfg_scale", str(cfg_scale))
+            metadata.add_text("sampler", sampler_name)
+            metadata.add_text("edit_time", f"{elapsed:.1f}s")
+            edited_pil.save(filepath, pnginfo=metadata)
+
+            final_status = status + f"\n✅ Edit complete in {elapsed:.1f}s!\n"
+            final_status += f"💾 Saved: {filename}\n"
+
+            # Warn if image wasn't encoded (means it was ignored)
+            if not image_was_encoded:
+                final_status += "\n⚠️ WARNING: Server didn't encode input image!\n"
+                final_status += "   This means it generated from scratch, not editing.\n"
+                final_status += "   → Check model is an edit model (Qwen Edit, Flux Kontext, etc.)\n"
+                final_status += "   → Try adjusting strength (0.7-0.8 recommended)\n"
+
+            progress(1.0, desc="Complete!")
+
+            return edited_pil, final_status
+        else:
+            return None, status + "❌ No images generated"
+
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        return None, f"❌ Error during editing:\n{str(e)}\n\nDetails:\n{error_details}"
 
 
 def check_for_updates() -> Tuple[str, str]:
@@ -1029,7 +1289,9 @@ def create_ui():
                             lines=12,
                             interactive=True
                         )
-                        expand_send_to_refine = gr.Button("➡️ Send to Refine", size="sm")
+                        with gr.Row():
+                            expand_send_to_refine = gr.Button("➡️ Send to Refine", size="sm")
+                            expand_send_to_edit = gr.Button("🎨 Send to Edit", size="sm")
 
                 expand_btn.click(
                     fn=expand_prompt,
@@ -1054,7 +1316,9 @@ def create_ui():
                             lines=12,
                             interactive=True
                         )
-                        extract_send_to_refine = gr.Button("➡️ Send to Refine", size="sm")
+                        with gr.Row():
+                            extract_send_to_refine = gr.Button("➡️ Send to Refine", size="sm")
+                            extract_send_to_edit = gr.Button("🎨 Send to Edit", size="sm")
 
                 extract_btn.click(
                     fn=extract_prompt,
@@ -1109,7 +1373,131 @@ def create_ui():
                 gr.Markdown("*Use the Image Generation section below to create the image*")
 
             # ==================================================================
-            # TAB 5: Settings
+            # TAB 5: Edit Image
+            # ==================================================================
+            with gr.Tab("🎨 Edit Image"):
+                gr.Markdown("### Edit an image using AI instructions")
+                gr.Markdown("*Use edit models like **Qwen Image Edit** or **Flux Kontext** for best results*")
+
+                with gr.Row():
+                    with gr.Column(scale=2):
+                        edit_image_input = gr.Image(
+                            label="Image to Edit",
+                            type="numpy",
+                            sources=["upload", "clipboard"]
+                        )
+                        edit_instruction = gr.Textbox(
+                            label="Edit Instruction",
+                            placeholder="e.g., 'Make it sunset', 'Add snow', 'Change hair to red'",
+                            lines=3,
+                            interactive=True
+                        )
+
+                        with gr.Accordion("Generation Settings", open=True):
+                            edit_model = gr.Dropdown(
+                                label="Model",
+                                choices=[],
+                                value="",
+                                interactive=True,
+                                allow_custom_value=True,
+                                info="Use Qwen Image Edit or similar edit models"
+                            )
+                            edit_preset = gr.Dropdown(
+                                label="Preset",
+                                choices=["Custom (no preset)"],  # Will be populated when model selected
+                                value="Custom (no preset)",
+                                interactive=True
+                            )
+                            edit_preset_info = gr.Textbox(
+                                label="Preset Info",
+                                value="Select a model first to see available presets",
+                                interactive=False,
+                                lines=2
+                            )
+                            with gr.Row():
+                                edit_steps = gr.Slider(1, 100, 28, step=1, label="Steps")
+                                edit_cfg = gr.Slider(0.0, 20.0, 5.0, step=0.1, label="CFG Scale")
+                            edit_sampler = gr.Dropdown(
+                                choices=SAMPLER_NAMES,
+                                value=SAMPLER_DEFAULT,
+                                label="Sampler"
+                            )
+                            edit_strength = gr.Slider(
+                                0.0, 1.0, 0.75,
+                                label="Strength",
+                                info="How much to modify (0.75=recommended, 1.0=maximum change, 0.5=subtle)"
+                            )
+
+                            # LoRA Support
+                            gr.Markdown("**LoRAs (optional)**")
+                            with gr.Row():
+                                edit_lora1 = gr.Dropdown(
+                                    label="LoRA 1",
+                                    choices=["None"],
+                                    value="None",
+                                    interactive=True,
+                                    allow_custom_value=True,
+                                    scale=3
+                                )
+                                edit_lora1_weight = gr.Slider(
+                                    0.0, 2.0, 1.0,
+                                    step=0.05,
+                                    label="Weight",
+                                    scale=1
+                                )
+                            with gr.Row():
+                                edit_lora2 = gr.Dropdown(
+                                    label="LoRA 2",
+                                    choices=["None"],
+                                    value="None",
+                                    interactive=True,
+                                    allow_custom_value=True,
+                                    scale=3
+                                )
+                                edit_lora2_weight = gr.Slider(
+                                    0.0, 2.0, 1.0,
+                                    step=0.05,
+                                    label="Weight",
+                                    scale=1
+                                )
+
+                        with gr.Accordion("Advanced Settings", open=False):
+                            edit_negative = gr.Textbox(
+                                label="Negative Prompt",
+                                value="blurry, low quality, distorted",
+                                lines=2
+                            )
+                            with gr.Row():
+                                edit_seed = gr.Number(
+                                    label="Seed (-1 = random)",
+                                    value=-1,
+                                    precision=0
+                                )
+                                edit_clip_skip = gr.Slider(
+                                    1, 12, 1,
+                                    step=1,
+                                    label="CLIP Skip"
+                                )
+                            edit_shift = gr.Slider(
+                                0.0, 10.0, 3.0,
+                                step=0.1,
+                                label="Shift",
+                                info="Qwen Edit default: 3.0"
+                            )
+                            edit_res_shift = gr.Checkbox(
+                                value=False,
+                                label="Resolution-Dependent Shift",
+                                info="Auto-calculate shift based on resolution (for FLUX models)"
+                            )
+
+                        edit_btn = gr.Button("✨ Edit Image", variant="primary", size="lg")
+
+                    with gr.Column(scale=3):
+                        edit_result_image = gr.Image(label="Edited Result")
+                        edit_status = gr.Textbox(label="Status", lines=12)
+
+            # ==================================================================
+            # TAB 6: Settings
             # ==================================================================
             with gr.Tab("⚙️ Settings"):
                 gr.Markdown("### Configuration")
@@ -1445,6 +1833,13 @@ def create_ui():
                             info="How much to modify in second pass (0.7 recommended)"
                         )
 
+                    # Performance optimizations
+                    gen_tea_cache = gr.Checkbox(
+                        value=False,
+                        label="Enable TeaCache",
+                        info="Timestep Embedding Aware Cache - accelerates generation (training-free)"
+                    )
+
                     # Hidden placeholders for removed settings (kept for preset compatibility)
                     gen_cfg_zero = gr.Checkbox(value=False, visible=False)
 
@@ -1467,7 +1862,7 @@ def create_ui():
             inputs=[gen_preset],
             outputs=[gen_steps, gen_cfg, gen_preset_info, gen_sampler,
                     gen_shift, gen_res_shift, gen_seed_mode, gen_cfg_zero, gen_hires,
-                    gen_hires_start_width, gen_hires_start_height, gen_hires_strength, gen_clip_skip]
+                    gen_hires_start_width, gen_hires_start_height, gen_hires_strength, gen_clip_skip, gen_tea_cache]
         )
 
         # Toggle hires fix controls visibility
@@ -1490,7 +1885,7 @@ def create_ui():
             inputs=[gen_prompt, gen_model, gen_lora1, gen_lora1_weight, gen_lora2, gen_lora2_weight,
                    gen_steps, gen_cfg, gen_sampler, gen_aspect, gen_resolution_scale, gen_seed, gen_negative,
                    gen_shift, gen_res_shift, gen_seed_mode, gen_cfg_zero, gen_hires,
-                   gen_hires_start_width, gen_hires_start_height, gen_hires_strength, gen_clip_skip],
+                   gen_hires_start_width, gen_hires_start_height, gen_hires_strength, gen_clip_skip, gen_tea_cache],
             outputs=[gen_image, gen_status]
         )
 
@@ -1504,18 +1899,62 @@ def create_ui():
         expand_send_to_refine.click(lambda x: x, inputs=expand_output, outputs=refine_current)
         extract_send_to_refine.click(lambda x: x, inputs=extract_output, outputs=refine_current)
 
-        # Wire up gRPC connection to update BOTH settings and generation dropdowns
-        # This is done here because gen_model and gen_lora1/2 are created after grpc_connect_btn
+        # Send to Edit buttons
+        expand_send_to_edit.click(lambda x: x, inputs=expand_output, outputs=edit_instruction)
+        extract_send_to_edit.click(
+            lambda img, prompt: (img, prompt),
+            inputs=[extract_image, extract_output],
+            outputs=[edit_image_input, edit_instruction]
+        )
+
+        # Edit Image button
+        edit_btn.click(
+            fn=edit_image,
+            inputs=[edit_image_input, edit_instruction, edit_model, edit_steps, edit_cfg,
+                   edit_sampler, edit_strength, edit_lora1, edit_lora1_weight,
+                   edit_lora2, edit_lora2_weight, edit_negative, edit_seed,
+                   edit_clip_skip, edit_shift, edit_res_shift],
+            outputs=[edit_result_image, edit_status]
+        )
+
+        # Edit tab model selection updates preset choices
+        edit_model.change(
+            fn=lambda model_name: on_model_selected(model_name)[0:2],  # Return preset dropdown and info only
+            inputs=[edit_model],
+            outputs=[edit_preset, edit_preset_info]
+        )
+
+        # Edit tab preset selection updates settings (only the ones that exist in Edit tab)
+        def on_edit_preset_selected(preset_name: str):
+            """Apply preset to Edit tab (subset of controls)"""
+            result = on_preset_selected(preset_name)
+            # Extract: steps, cfg, info, sampler, shift, res_shift, clip_skip
+            # Skip: seed_mode, cfg_zero, hires, hires_width, hires_height, hires_strength, tea_cache
+            return (result[0], result[1], result[2], result[3],
+                    result[4], result[5], result[12])  # steps, cfg, info, sampler, shift, res_shift, clip_skip
+
+        edit_preset.change(
+            fn=on_edit_preset_selected,
+            inputs=[edit_preset],
+            outputs=[edit_steps, edit_cfg, edit_preset_info, edit_sampler,
+                    edit_shift, edit_res_shift, edit_clip_skip]
+        )
+
+        # Wire up gRPC connection to update ALL dropdowns (settings, generation, and edit)
+        # This is done here because gen_model, edit_model, etc. are created after grpc_connect_btn
         def init_grpc_all(server_url):
             """Initialize gRPC and return updates for all dropdowns"""
             status, models_dropdown, loras_dropdown = init_grpc(server_url)
-            # Return: status, settings_models, settings_loras, gen_models, gen_lora1, gen_lora2
-            return status, models_dropdown, loras_dropdown, models_dropdown, loras_dropdown, loras_dropdown
+            # Return: status, settings_models, settings_loras, gen_models, gen_lora1, gen_lora2,
+            #         edit_model, edit_lora1, edit_lora2
+            return (status, models_dropdown, loras_dropdown, models_dropdown, loras_dropdown,
+                   loras_dropdown, models_dropdown, loras_dropdown, loras_dropdown)
 
         grpc_connect_btn.click(
             fn=init_grpc_all,
             inputs=[grpc_server],
-            outputs=[grpc_status, grpc_model_dropdown, grpc_lora_dropdown, gen_model, gen_lora1, gen_lora2]
+            outputs=[grpc_status, grpc_model_dropdown, grpc_lora_dropdown, gen_model, gen_lora1,
+                    gen_lora2, edit_model, edit_lora1, edit_lora2]
         )
 
     return app

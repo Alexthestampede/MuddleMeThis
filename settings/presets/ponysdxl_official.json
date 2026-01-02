@@ -25,6 +25,7 @@
   "faceRestoration": "",
   "causalInferencePad": 0,
   "clip_skip": 2,
+  "teaCache": false,
   "loras": [],
   "controls": [],
   "notes": "For Pony, Illustrious, NoobXL, and other SDXL-based models"

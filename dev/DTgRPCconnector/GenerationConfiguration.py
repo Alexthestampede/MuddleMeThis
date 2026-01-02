@@ -344,3 +344,9 @@ def GenerationConfigurationAddCfgZeroInitSteps(builder, cfgZeroInitSteps):
 
 def AddCfgZeroInitSteps(builder, cfgZeroInitSteps):
     GenerationConfigurationAddCfgZeroInitSteps(builder, cfgZeroInitSteps)
+
+def GenerationConfigurationAddTeaCache(builder, teaCache):
+    builder.PrependBoolSlot(75, teaCache, 0)
+
+def AddTeaCache(builder, teaCache):
+    GenerationConfigurationAddTeaCache(builder, teaCache)

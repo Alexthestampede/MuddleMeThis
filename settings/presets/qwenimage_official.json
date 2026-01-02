@@ -25,6 +25,7 @@
   "faceRestoration": "",
   "causalInferencePad": 0,
   "clip_skip": 1,
+  "teaCache": false,
   "loras": [],
   "controls": [],
   "notes": "For Qwen visual models"

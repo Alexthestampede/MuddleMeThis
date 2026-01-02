@@ -25,6 +25,7 @@
   "faceRestoration": "",
   "causalInferencePad": 0,
   "clip_skip": 2,
+  "teaCache": false,
   "loras": [],
   "controls": [],
   "notes": "Fast generation with FLUX Schnell"
