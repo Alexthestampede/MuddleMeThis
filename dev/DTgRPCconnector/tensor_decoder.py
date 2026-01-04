@@ -34,13 +34,17 @@ def decode_tensor(data: bytes) -> Tuple[np.ndarray, int, int, int]:
     """
     # Read header as 32-bit unsigned integers
     header = struct.unpack_from('<32I', data, 0)
-    
+
     magic = header[0]
     height = header[6]
     width = header[7]
     channels = header[8]
-    
+
     is_compressed = (magic == MAGIC_COMPRESSED)
+
+    # DEBUG: Log full header to understand server format
+    print(f"[DECODER] Magic: {magic}, Height: {height}, Width: {width}, Channels: {channels}")
+    print(f"[DECODER] Header bytes 0-4: {header[0:5]}")
     
     print(f"Image: {width}×{height}×{channels}")
     print(f"Compressed: {is_compressed}")
@@ -80,8 +84,9 @@ def decode_tensor(data: bytes) -> Tuple[np.ndarray, int, int, int]:
     print(f"Value range: [{tensor.min():.3f}, {tensor.max():.3f}]")
     
     # Convert from [-1, 1] to [0, 255]
-    # Formula from dt-grpc-ts: (f16 + 1) * 127
-    image_array = ((tensor + 1.0) * 127.0).clip(0, 255).astype(np.uint8)
+    # CRITICAL: Must use 127.5 for proper symmetry with encoder
+    # -1.0 → 0, 0.0 → 127.5 → 128, 1.0 → 255
+    image_array = ((tensor + 1.0) * 127.5).clip(0, 255).astype(np.uint8)
     
     return image_array, width, height, channels
 

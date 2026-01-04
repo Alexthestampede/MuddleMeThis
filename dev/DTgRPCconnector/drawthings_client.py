@@ -30,8 +30,12 @@ Example usage:
 import grpc
 import flatbuffers
 import random
+import hashlib
+import tempfile
+from pathlib import Path
 from typing import Optional, Callable, List
 from dataclasses import dataclass, field
+from PIL import Image
 
 # Import generated protobuf files
 import imageService_pb2
@@ -336,6 +340,7 @@ class DrawThingsClient:
         config: ImageGenerationConfig,
         negative_prompt: str = "",
         scale_factor: int = 1,
+        input_image: Optional[bytes] = None,
         progress_callback: Optional[Callable[[str, int], None]] = None,
         preview_callback: Optional[Callable[[bytes], None]] = None
     ) -> List[bytes]:
@@ -346,6 +351,8 @@ class DrawThingsClient:
             config: Image generation configuration
             negative_prompt: Negative prompt (optional)
             scale_factor: Image scale factor
+            input_image: Optional input image bytes (PIL Image format) for img2img/edit.
+                        Will be automatically resized to match config dimensions.
             progress_callback: Optional callback for progress updates.
                                Called with (stage_name, step_number)
             preview_callback: Optional callback for preview images.
@@ -367,16 +374,58 @@ class DrawThingsClient:
         # Build FlatBuffer configuration
         config_bytes = config.to_flatbuffer()
 
+        # Process input image if provided
+        image_hash = None
+        image_tensor = None
+        if input_image is not None:
+            # Import tensor encoder
+            from tensor_encoder import encode_image_to_tensor
+
+            # Load image from bytes
+            from io import BytesIO
+            pil_img = Image.open(BytesIO(input_image))
+
+            # Convert to RGB if needed
+            if pil_img.mode != 'RGB':
+                pil_img = pil_img.convert('RGB')
+
+            # Resize to match config dimensions
+            target_size = (config.width, config.height)
+            if pil_img.size != target_size:
+                pil_img = pil_img.resize(target_size, Image.Resampling.LANCZOS)
+
+            # Save to temporary file for encoding
+            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+                tmp_path = tmp.name
+                pil_img.save(tmp_path)
+
+            try:
+                # Encode to tensor format
+                image_tensor = encode_image_to_tensor(tmp_path, compress=True)
+
+                # Calculate SHA256 hash
+                image_hash = hashlib.sha256(image_tensor).digest()
+            finally:
+                # Clean up temp file
+                Path(tmp_path).unlink(missing_ok=True)
+
         # Create gRPC request
-        request = imageService_pb2.ImageGenerationRequest(
-            prompt=prompt,
-            negativePrompt=negative_prompt,
-            configuration=config_bytes,
-            scaleFactor=scale_factor,
-            user="DrawThingsPythonClient",
-            device=imageService_pb2.LAPTOP,
-            chunked=True  # Accept chunked responses
-        )
+        request_kwargs = {
+            'prompt': prompt,
+            'negativePrompt': negative_prompt,
+            'configuration': config_bytes,
+            'scaleFactor': scale_factor,
+            'user': "DrawThingsPythonClient",
+            'device': imageService_pb2.LAPTOP,
+            'chunked': True  # Accept chunked responses
+        }
+
+        # Add image data if provided
+        if image_hash is not None and image_tensor is not None:
+            request_kwargs['image'] = image_hash
+            request_kwargs['contents'] = [image_tensor]
+
+        request = imageService_pb2.ImageGenerationRequest(**request_kwargs)
 
         # Stream response
         generated_images = []
