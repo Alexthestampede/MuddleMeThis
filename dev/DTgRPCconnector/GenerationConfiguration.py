@@ -213,6 +213,13 @@ def GenerationConfigurationAddUpscaler(builder, upscaler):
 def AddUpscaler(builder, upscaler):
     GenerationConfigurationAddUpscaler(builder, upscaler)
 
+# Image guidance scale for edit models (Qwen Edit, Kontext, etc.)
+def GenerationConfigurationAddImageGuidanceScale(builder, imageGuidanceScale):
+    builder.PrependFloat32Slot(16, imageGuidanceScale, 1.5)
+
+def AddImageGuidanceScale(builder, imageGuidanceScale):
+    GenerationConfigurationAddImageGuidanceScale(builder, imageGuidanceScale)
+
 def GenerationConfigurationAddSeedMode(builder, seedMode):
     builder.PrependUint8Slot(17, seedMode, 0)
 

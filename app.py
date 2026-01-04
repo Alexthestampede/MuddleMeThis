@@ -199,6 +199,36 @@ def extract_prompt(image) -> str:
         return f"❌ Error: {str(e)}"
 
 
+def copy_style(image) -> str:
+    """Analyze image style and generate detailed style description"""
+    if not state.vision_processor:
+        return "❌ Vision processor not initialized. Configure in Settings tab first."
+
+    if image is None:
+        return "❌ Please upload an image first"
+
+    try:
+        # Convert image to base64
+        buffered = io.BytesIO()
+        Image.fromarray(image).save(buffered, format="PNG")
+        img_base64 = base64.b64encode(buffered.getvalue()).decode()
+
+        # Load the style copy prompt from stylecopy.txt
+        style_prompt = settings.load_system_prompt('stylecopy')
+
+        # Use vision model to analyze style
+        result = state.vision_processor.analyze_image(
+            image_data=img_base64,
+            prompt=style_prompt if style_prompt else "Describe the visual style of this image in great detail as if trying to reproduce it just from the description."
+        )
+
+        if result:
+            return result
+        return "❌ Failed to analyze style"
+    except Exception as e:
+        return f"❌ Error: {str(e)}"
+
+
 def refine_prompt(current_prompt: str, refinement_instruction: str) -> str:
     """Refine existing prompt based on user instruction"""
     if not state.text_processor:
@@ -853,7 +883,15 @@ def edit_image(input_image, instruction: str, model: str, steps: int, cfg_scale:
     import hashlib
     import time
     import sys
+    import importlib
     sys.path.insert(0, str(Path(__file__).parent / 'dev' / 'DTgRPCconnector'))
+
+    # Force reload to ensure we use latest version
+    import tensor_encoder
+    import tensor_decoder
+    importlib.reload(tensor_encoder)
+    importlib.reload(tensor_decoder)
+
     from tensor_encoder import encode_image_to_tensor
     from tensor_decoder import tensor_to_pil
 
@@ -862,10 +900,22 @@ def edit_image(input_image, instruction: str, model: str, steps: int, cfg_scale:
     try:
         # Convert numpy array to PIL Image
         pil_img = Image.fromarray(input_image.astype('uint8'), 'RGB')
+        original_size = pil_img.size
 
         # Translate display name to actual filename
         model_file = state.model_name_to_file.get(model, model)
         print(f"[DEBUG] Edit: Model display='{model}' → file='{model_file}'")
+
+        # Detect model version from metadata for proper LoRA handling
+        model_version = 'qwenImage'  # Default for Qwen Edit models
+        try:
+            if state.grpc_metadata:
+                model_info = state.grpc_metadata.get_latent_info(model_file)
+                detected_version = model_info.get('version', 'qwenImage')
+                model_version = detected_version
+                print(f"[DEBUG] Detected model version: {model_version}")
+        except Exception as e:
+            print(f"[DEBUG] Could not detect model version, using default: {e}")
 
         status = f"🎨 Editing image...\n\n"
         status += f"📝 Instruction: {instruction}\n"
@@ -874,15 +924,29 @@ def edit_image(input_image, instruction: str, model: str, steps: int, cfg_scale:
         status += f"🎲 Sampler: {sampler_name}\n"
         status += f"💪 Strength: {strength}"
 
-        # Add warning if strength might cause issues
+        # Note about strength for edit models
         if strength == 1.0:
-            status += " ⚠️ HIGH - may ignore input (try 0.7-0.8 if image is ignored)\n"
+            status += " (edit models like Qwen Edit use strength=1.0)\n"
         elif strength < 0.5:
-            status += " (subtle edit)\n"
+            status += " (subtle edit - may not change much)\n"
+        elif strength >= 0.7:
+            status += " (strong edit)\n"
         else:
             status += " (moderate edit)\n"
 
-        status += f"📐 Input: {pil_img.width}×{pil_img.height} pixels\n\n"
+        status += f"📐 Input: {original_size[0]}×{original_size[1]} pixels\n"
+
+        # CRITICAL: Calculate target dimensions based on input image
+        # Round to nearest 64 pixels to match model requirements
+        target_width = ((pil_img.width + 32) // 64) * 64
+        target_height = ((pil_img.height + 32) // 64) * 64
+
+        # Resize if needed (required to prevent crashes)
+        if pil_img.size != (target_width, target_height):
+            status += f"📐 Resizing to: {target_width}×{target_height} pixels (64-pixel aligned)\n\n"
+            pil_img = pil_img.resize((target_width, target_height), Image.Resampling.LANCZOS)
+        else:
+            status += f"📐 Image already 64-pixel aligned\n\n"
 
         progress(0.1, desc="Encoding input image...")
 
@@ -890,6 +954,7 @@ def edit_image(input_image, instruction: str, model: str, steps: int, cfg_scale:
         import tempfile
         with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
             pil_img.save(tmp.name)
+            # CRITICAL: Encoder now uses complete header format matching server
             tensor_bytes = encode_image_to_tensor(tmp.name, compress=True)
             Path(tmp.name).unlink()  # Clean up temp file
 
@@ -897,12 +962,18 @@ def edit_image(input_image, instruction: str, model: str, steps: int, cfg_scale:
         hash_digest = hashlib.sha256(tensor_bytes).digest()
         hash_hex = hash_digest.hex()
 
+        # Verify hash by re-calculating from contents
+        verify_hash = hashlib.sha256(tensor_bytes).hexdigest()
+        hash_match = (verify_hash == hash_hex)
+
         status += f"📦 Encoded: {len(tensor_bytes):,} bytes\n"
-        status += f"🔑 Hash: {hash_hex[:16]}...\n\n"
+        status += f"🔑 Hash: {hash_hex[:16]}...\n"
+        status += f"✓ Hash verified: {hash_match}\n\n"
 
         # Debug: verify hash calculation
         print(f"[DEBUG] Tensor size: {len(tensor_bytes)} bytes")
         print(f"[DEBUG] SHA256: {hash_hex}")
+        print(f"[DEBUG] Hash verification: {hash_match}")
         print(f"[DEBUG] Hash length: {len(hash_digest)} bytes (should be 32)")
         print(f"[DEBUG] Sending image field: {len(hash_digest)} bytes")
         print(f"[DEBUG] Sending contents: 1 item of {len(tensor_bytes)} bytes")
@@ -942,9 +1013,10 @@ def edit_image(input_image, instruction: str, model: str, steps: int, cfg_scale:
         controls_vector = builder.EndVector()
 
         # Build configuration (img2img mode with strength)
-        # IMPORTANT: Calculate separate scales for width and height to preserve aspect ratio
-        scale_width = pil_img.width // 64
-        scale_height = pil_img.height // 64
+        # IMPORTANT: Calculate separate scales for width and height
+        # Use the resized (64-pixel aligned) dimensions
+        scale_width = target_width // 64
+        scale_height = target_height // 64
 
         # Get sampler ID from name
         sampler_id = SAMPLERS.get(sampler_name, 0)
@@ -970,15 +1042,22 @@ def edit_image(input_image, instruction: str, model: str, steps: int, cfg_scale:
         # Debug: log full configuration
         print(f"[DEBUG] Config: model={model_file}, steps={steps}, cfg={cfg_scale}, strength={strength}")
         print(f"[DEBUG] Sampler: {sampler_name} (id={sampler_id}), shift={final_shift}")
-        print(f"[DEBUG] Resolution: {scale_width}×{scale_height} scale units ({pil_img.width}×{pil_img.height} pixels)")
+        print(f"[DEBUG] Resolution: {scale_width}×{scale_height} scale units ({target_width}×{target_height} pixels)")
+        print(f"[DEBUG] Original input: {original_size[0]}×{original_size[1]} pixels")
 
         GenerationConfiguration.Start(builder)
         GenerationConfiguration.AddId(builder, 0)
         GenerationConfiguration.AddStartWidth(builder, scale_width)
         GenerationConfiguration.AddStartHeight(builder, scale_height)
+        # CRITICAL: For edit models, also set original/target image dimensions
+        GenerationConfiguration.AddOriginalImageWidth(builder, target_width)
+        GenerationConfiguration.AddOriginalImageHeight(builder, target_height)
+        GenerationConfiguration.AddTargetImageWidth(builder, target_width)
+        GenerationConfiguration.AddTargetImageHeight(builder, target_height)
         GenerationConfiguration.AddSeed(builder, actual_seed)
         GenerationConfiguration.AddSteps(builder, steps)
         GenerationConfiguration.AddGuidanceScale(builder, cfg_scale)
+        GenerationConfiguration.AddImageGuidanceScale(builder, 1.5)  # CRITICAL for edit models!
         GenerationConfiguration.AddStrength(builder, strength)  # IMG2IMG strength
         GenerationConfiguration.AddModel(builder, model_offset)
         GenerationConfiguration.AddSampler(builder, sampler_id)
@@ -995,17 +1074,44 @@ def edit_image(input_image, instruction: str, model: str, steps: int, cfg_scale:
         config_bytes = bytes(builder.Output())
 
         # Create gRPC request with image
-        # Note: For edit models like Qwen Edit, we only send the prompt (instruction)
-        # The negative prompt is intentionally omitted as edit models don't use it the same way
+        # CRITICAL: Must populate MetadataOverride.loras with JSON metadata
+        import json
+
+        # Build LoRA metadata list
+        lora_metadata = []
+        for lora_name, lora_weight in [(lora1, lora1_weight), (lora2, lora2_weight)]:
+            if lora_name and lora_name != "None" and lora_name.strip() and lora_weight > 0:
+                # Translate display name to filename
+                if hasattr(state, 'lora_name_to_file') and state.lora_name_to_file:
+                    lora_file = state.lora_name_to_file.get(lora_name, lora_name)
+                else:
+                    lora_file = lora_name
+
+                lora_metadata.append({
+                    'file': lora_file,
+                    'weight': float(lora_weight),
+                    'version': model_version  # Detected from model metadata
+                })
+
+        # Encode LoRA metadata as JSON
+        loras_json = json.dumps(lora_metadata).encode('utf-8') if lora_metadata else b''
+
+        # Create MetadataOverride with LoRA metadata
+        override = imageService_pb2.MetadataOverride(
+            loras=loras_json
+        ) if loras_json else imageService_pb2.MetadataOverride()
+
         request = imageService_pb2.ImageGenerationRequest(
             image=hash_digest,  # SHA256 reference
             prompt=instruction,  # Edit instruction
+            negativePrompt=negative_prompt,  # Include negative prompt
             configuration=config_bytes,
             scaleFactor=1,
+            override=override,  # Include LoRA metadata!
             user='MuddleMeThis',
             device=imageService_pb2.LAPTOP,
             contents=[tensor_bytes],  # Actual image data
-            chunked=False
+            chunked=True  # Match regular generation
         )
 
         print(f"[DEBUG] Request created: prompt='{instruction[:50]}...', image_hash={hash_hex[:16]}..., contents={len(request.contents)} items")
@@ -1015,6 +1121,7 @@ def edit_image(input_image, instruction: str, model: str, steps: int, cfg_scale:
 
         # Generate with tracking
         generated_images = []
+        image_chunks = []  # Buffer for chunked responses
         image_was_encoded = False
         for response in state.grpc_client.stub.GenerateImage(request):
             if response.HasField('currentSignpost'):
@@ -1031,8 +1138,20 @@ def edit_image(input_image, instruction: str, model: str, steps: int, cfg_scale:
                 elif signpost.HasField('imageDecoded'):
                     progress(0.98, desc="Result decoded")
 
+            # Handle chunked responses properly
             if response.generatedImages:
-                generated_images.extend(response.generatedImages)
+                for img_data in response.generatedImages:
+                    image_chunks.append(img_data)
+
+                # Check if this is the last chunk
+                if response.chunkState == imageService_pb2.LAST_CHUNK:
+                    # Combine chunks if needed
+                    if len(image_chunks) > 1:
+                        combined = b''.join(image_chunks)
+                        generated_images.append(combined)
+                    elif len(image_chunks) == 1:
+                        generated_images.append(image_chunks[0])
+                    image_chunks = []  # Reset for next image
 
         if generated_images:
             progress(0.99, desc="Decoding result...")
@@ -1327,7 +1446,35 @@ def create_ui():
                 )
 
             # ==================================================================
-            # TAB 3: Prompt Refinement
+            # TAB 3: Bofonchio MC's Restyler
+            # ==================================================================
+            with gr.Tab("🎭 Bofonchio MC's Restyler"):
+                gr.Markdown("### Copy the style from any image")
+                gr.Markdown("*Upload an image and get a detailed style description to use in your prompts*")
+
+                with gr.Row():
+                    with gr.Column(scale=2):
+                        style_image = gr.Image(label="Upload Image", type="numpy")
+                        style_btn = gr.Button("🎨 Analyze Style", variant="primary", size="lg")
+
+                    with gr.Column(scale=3):
+                        style_output = gr.Textbox(
+                            label="Style Description",
+                            lines=12,
+                            interactive=True
+                        )
+                        with gr.Row():
+                            style_send_to_refine = gr.Button("➡️ Send to Refine", size="sm")
+                            style_send_to_direct = gr.Button("📝 Send to Direct", size="sm")
+
+                style_btn.click(
+                    fn=copy_style,
+                    inputs=[style_image],
+                    outputs=style_output
+                )
+
+            # ==================================================================
+            # TAB 4: Prompt Refinement
             # ==================================================================
             with gr.Tab("✏️ Refine Prompt"):
                 gr.Markdown("### Modify an existing prompt with specific instructions")
@@ -1360,7 +1507,7 @@ def create_ui():
                 )
 
             # ==================================================================
-            # TAB 4: Direct Mode
+            # TAB 5: Direct Mode
             # ==================================================================
             with gr.Tab("✍️ Direct Mode"):
                 gr.Markdown("### Write your prompt directly and generate")
@@ -1373,10 +1520,11 @@ def create_ui():
                 gr.Markdown("*Use the Image Generation section below to create the image*")
 
             # ==================================================================
-            # TAB 5: Edit Image
+            # TAB 6: Edit Image
             # ==================================================================
             with gr.Tab("🎨 Edit Image"):
                 gr.Markdown("### Edit an image using AI instructions")
+                gr.Markdown("⚠️ **WARNING: This feature is currently non-functional.** Image editing is not working correctly at this time.")
                 gr.Markdown("*Use edit models like **Qwen Image Edit** or **Flux Kontext** for best results*")
 
                 with gr.Row():
@@ -1497,7 +1645,7 @@ def create_ui():
                         edit_status = gr.Textbox(label="Status", lines=12)
 
             # ==================================================================
-            # TAB 6: Settings
+            # TAB 7: Settings
             # ==================================================================
             with gr.Tab("⚙️ Settings"):
                 gr.Markdown("### Configuration")
@@ -1892,12 +2040,17 @@ def create_ui():
         # Link outputs from tabs to the generation prompt field
         expand_output.change(lambda x: x, inputs=expand_output, outputs=gen_prompt)
         extract_output.change(lambda x: x, inputs=extract_output, outputs=gen_prompt)
+        style_output.change(lambda x: x, inputs=style_output, outputs=gen_prompt)
         refine_output.change(lambda x: x, inputs=refine_output, outputs=gen_prompt)
         direct_prompt.change(lambda x: x, inputs=direct_prompt, outputs=gen_prompt)
 
         # Send to Refine buttons
         expand_send_to_refine.click(lambda x: x, inputs=expand_output, outputs=refine_current)
         extract_send_to_refine.click(lambda x: x, inputs=extract_output, outputs=refine_current)
+        style_send_to_refine.click(lambda x: x, inputs=style_output, outputs=refine_current)
+
+        # Send to Direct buttons
+        style_send_to_direct.click(lambda x: x, inputs=style_output, outputs=direct_prompt)
 
         # Send to Edit buttons
         expand_send_to_edit.click(lambda x: x, inputs=expand_output, outputs=edit_instruction)
