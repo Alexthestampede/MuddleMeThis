@@ -51,6 +51,7 @@ MuddleMeThis/
 │   ├── expand.txt                # System prompt for expansion
 │   ├── extract.txt               # System prompt for extraction
 │   ├── refine.txt                # System prompt for refinement
+│   ├── stylecopy.txt             # System prompt for style analysis
 │   ├── aspectratio.txt           # Aspect ratio definitions
 │   ├── presets/                  # Model presets (JSON)
 │   │   ├── flux_official.json
@@ -58,12 +59,14 @@ MuddleMeThis/
 │   │   ├── ponysdxl_official.json
 │   │   ├── sd15_official.json
 │   │   ├── qwenimage_official.json
-│   │   └── chroma_official.json
+│   │   ├── chroma_official.json
+│   │   └── straysignal_chroma.json
 │   └── negative_prompts/         # Negative prompt presets (JSON)
 │       ├── realistic_quality.json
 │       ├── anime_pony.json
 │       ├── simple.json
-│       └── none.json
+│       ├── none.json
+│       └── chroma.json
 ├── dev/
 │   ├── DTgRPCconnector/          # Draw Things gRPC Python client
 │   ├── ModuLLe/                  # LLM provider abstraction layer
@@ -178,11 +181,13 @@ description = vision_processor.analyze_image(
 ### Core Functionality (✅ Complete)
 1. **Prompt Expansion**: User inputs brief prompt, LLM expands it with rich details
 2. **Prompt Extraction**: User uploads image, vision LLM generates matching prompt
-3. **Prompt Refinement**: User requests modifications, LLM adjusts prompt intelligently
-4. **Direct Mode**: User writes complete prompt, uses as-is for generation
+3. **Bofonchio MC's Restyler**: User uploads image, vision LLM analyzes and describes the visual style in detail
+4. **Prompt Refinement**: User requests modifications, LLM adjusts prompt intelligently
+5. **Direct Mode**: User writes complete prompt, uses as-is for generation
+6. **Edit Image**: ⚠️ Non-functional - Image editing feature currently not working
 
 ### UI Implementation (Gradio)
-- Tabbed interface with Settings, Expand, Extract, Refine, Direct, and Generate sections
+- Tabbed interface with Settings, Expand, Extract, Bofonchio MC's Restyler, Refine, Direct, Edit Image, and Generate sections
 - Text areas with copy buttons and character counts
 - Image upload with preview and drag-drop support
 - Real-time progress tracking during generation
@@ -197,8 +202,8 @@ description = vision_processor.analyze_image(
 - **High-Res Fix**: Two-pass generation (512→1024 for SD 1.5) with configurable start resolution and refinement strength
 - **Resolution Scale Multiplier**: Scale any aspect ratio by 0.5x-4x for flexible output sizes
 - **Resolution-Dependent Shift**: Official exponential formula from Draw Things (ModelZoo.swift)
-- **Negative Prompt Presets**: Quick-select common negative prompts (Realistic, Anime/Pony, Simple, None)
-- **Official Presets**: 6 official Draw Things presets (FLUX, Schnell, Pony, SDXL, SD1.5, Qwen, Chroma)
+- **Negative Prompt Presets**: Quick-select common negative prompts (Realistic, Anime/Pony, Simple, None, Straysignal Chroma)
+- **Official Presets**: 7 official/community presets (FLUX, Schnell, Pony, SDXL, SD1.5, Qwen, Chroma, Straysignal Chroma)
 - **Auto-Save**: Images saved with descriptive filenames and comprehensive PNG metadata
 - **Generation Timing**: Track how long each image takes to generate
 - **PWA Support**: Install as standalone progressive web app
