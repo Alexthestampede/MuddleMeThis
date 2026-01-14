@@ -958,13 +958,10 @@ def edit_image(input_image, instruction: str, model: str, steps: int, cfg_scale:
         status += f"🔑 Hash: {hash_hex[:16]}...\n"
         status += f"✓ Hash verified: {hash_match}\n\n"
 
-        # Debug: verify hash calculation
+        # Debug: verify tensor encoding
         print(f"[DEBUG] Tensor size: {len(tensor_bytes)} bytes")
         print(f"[DEBUG] SHA256: {hash_hex}")
-        print(f"[DEBUG] Hash verification: {hash_match}")
-        print(f"[DEBUG] Hash length: {len(hash_digest)} bytes (should be 32)")
-        print(f"[DEBUG] Sending image field: {len(hash_digest)} bytes")
-        print(f"[DEBUG] Sending contents: 1 item of {len(tensor_bytes)} bytes")
+        print(f"[DEBUG] Sending via hints (shuffle type) with weight=1.0")
 
         progress(0.2, desc="Building configuration...")
 
@@ -1057,12 +1054,20 @@ def edit_image(input_image, instruction: str, model: str, steps: int, cfg_scale:
         GenerationConfiguration.AddSeedMode(builder, 2)
         GenerationConfiguration.AddClipSkip(builder, clip_skip)
 
+        print(f"[DEBUG] FlatBuffer fields:")
+        print(f"  StartWidth/Height: {scale_width}×{scale_height} scale units")
+        print(f"  OriginalImageWidth/Height: {target_width}×{target_height} pixels")
+        print(f"  TargetImageWidth/Height: {target_width}×{target_height} pixels")
+        print(f"  ImageGuidanceScale: 1.5")
+        print(f"  Strength: {strength}")
+        print(f"  LoRAs in config: {len(lora_offsets)}")
+
         config = GenerationConfiguration.End(builder)
         builder.Finish(config)
         config_bytes = bytes(builder.Output())
 
-        # Create gRPC request with image
-        # CRITICAL: Must populate MetadataOverride.loras with JSON metadata
+        # Create gRPC request with image AS HINT (not as image field!)
+        # CRITICAL: For edit models like Qwen Edit, use hints with hintType="shuffle"
         import json
 
         # Build LoRA metadata list
@@ -1089,8 +1094,21 @@ def edit_image(input_image, instruction: str, model: str, steps: int, cfg_scale:
             loras=loras_json
         ) if loras_json else imageService_pb2.MetadataOverride()
 
+        # Create hint with reference image (shuffle type for edit/reference)
+        tensor_and_weight = imageService_pb2.TensorAndWeight(
+            tensor=tensor_bytes,
+            weight=1.0  # Full influence from reference image
+        )
+
+        hint = imageService_pb2.HintProto(
+            hintType="shuffle",  # Type for reference/moodboard images
+            tensors=[tensor_and_weight]
+        )
+
+        print(f"[DEBUG] Created hint: type='shuffle', tensors=1, weight=1.0")
+
         request = imageService_pb2.ImageGenerationRequest(
-            image=hash_digest,  # SHA256 reference
+            hints=[hint],  # Use hints instead of image field!
             prompt=instruction,  # Edit instruction
             negativePrompt=negative_prompt,  # Include negative prompt
             configuration=config_bytes,
@@ -1098,11 +1116,11 @@ def edit_image(input_image, instruction: str, model: str, steps: int, cfg_scale:
             override=override,  # Include LoRA metadata!
             user='MuddleMeThis',
             device=imageService_pb2.LAPTOP,
-            contents=[tensor_bytes],  # Actual image data
+            contents=[tensor_bytes],  # Still provide actual image data
             chunked=True  # Match regular generation
         )
 
-        print(f"[DEBUG] Request created: prompt='{instruction[:50]}...', image_hash={hash_hex[:16]}..., contents={len(request.contents)} items")
+        print(f"[DEBUG] Request created: prompt='{instruction[:50]}...', hints={len(request.hints)}, contents={len(request.contents)} items")
 
         status += "📡 Sending to server...\n"
         progress(0.3, desc="Sending image + instruction...")
