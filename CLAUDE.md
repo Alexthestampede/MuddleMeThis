@@ -94,8 +94,10 @@ A Python client library for Draw Things gRPC server enabling programmatic image 
   - SDXL workaround: Use `÷ 64` even though latent_size is 128
 - **Resolution-Dependent Shift**: Client-side calculation using official exponential formula
   - Formula: `shift = exp(((resolution_factor - 256) * (1.15 - 0.5) / (4096 - 256)) + 0.5)`
-  - Where: `resolution_factor = (latent_h * latent_w) * 16`
+  - Where: `resolution_factor = (pixel_width * pixel_height) / 256`
+  - This is a universal calculation independent of model latent size
   - Maps resolution to shift range 0.5-1.15 exactly as in official Draw Things app
+  - When enabled, the calculated shift replaces the manual shift value (not multiplied)
   - Source: ModelZoo.swift:2358-2360 from official Draw Things app
 - **High-Res Fix**: Two-pass generation for better quality at high resolutions
   - First pass: Generate at lower resolution (e.g., 512×512 for SD 1.5)

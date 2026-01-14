@@ -587,12 +587,9 @@ def generate_image(prompt: str, model: str, lora1: str, lora1_weight: float, lor
         # Official formula from Draw Things ModelZoo.swift:2358-2360
         final_shift = float(shift)
         if res_dependent_shift:
-            # Convert to latent resolution (divide by 8 for most models)
-            latent_width = width // 8
-            latent_height = height // 8
-
-            # Total latent pixels multiplied by 16
-            resolution_factor = (latent_height * latent_width) * 16
+            # Resolution factor: pixel area divided by 256
+            # This is the universal formula used by Draw Things regardless of model latent size
+            resolution_factor = (width * height) / 256
 
             # Official exponential formula: maps resolution to shift range 0.5-1.15
             import math
@@ -600,22 +597,13 @@ def generate_image(prompt: str, model: str, lora1: str, lora1_weight: float, lor
                 ((resolution_factor - 256) * (1.15 - 0.5) / (4096 - 256)) + 0.5
             )
 
-            # If user provided a custom base shift, scale the calculated value proportionally
-            if shift != 1.0:
-                final_shift = calculated_shift * shift
-            else:
-                final_shift = calculated_shift
+            # When resolution-dependent shift is enabled, the calculated value replaces the manual shift
+            final_shift = calculated_shift
 
             print(f"\n⚙️  Resolution-Dependent Shift Calculation (Official Formula):")
             print(f"   Pixels: {width}x{height}")
-            print(f"   Latents: {latent_width}x{latent_height}")
-            print(f"   Resolution Factor: {resolution_factor}")
-            print(f"   Calculated Shift: {calculated_shift:.3f}")
-            if shift != 1.0:
-                print(f"   Base Shift Multiplier: {shift}")
-                print(f"   → Final Shift: {final_shift:.3f}")
-            else:
-                print(f"   → Final Shift: {final_shift:.3f}")
+            print(f"   Resolution Factor: {resolution_factor:.1f}")
+            print(f"   → Calculated Shift: {final_shift:.2f}")
         else:
             print(f"\n⚙️  Shift: {final_shift} (no resolution adjustment)")
 
@@ -1027,11 +1015,11 @@ def edit_image(input_image, instruction: str, model: str, steps: int, cfg_scale:
         # Calculate resolution-dependent shift if enabled (FLUX models)
         if res_dependent_shift:
             import math
-            latent_h = scale_height
-            latent_w = scale_width
-            resolution_factor = (latent_h * latent_w) * 16
+            # Resolution factor: pixel area divided by 256
+            # Use target dimensions (in pixels), not scale units!
+            resolution_factor = (target_width * target_height) / 256
             final_shift = math.exp(((resolution_factor - 256) * (1.15 - 0.5) / (4096 - 256)) + 0.5)
-            status += f"📐 Resolution-dependent shift: {final_shift:.3f}\n"
+            status += f"📐 Resolution-dependent shift: {final_shift:.2f} (calculated from {target_width}×{target_height})\n"
         else:
             final_shift = shift
 
