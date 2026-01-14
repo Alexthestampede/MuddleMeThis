@@ -108,6 +108,11 @@ class ImageGenerationConfig:
         cfg_zero_init_steps: CFG zero initialization steps
         causal_inference_pad: Causal inference padding
         tea_cache: Enable TeaCache acceleration (timestep embedding aware cache)
+        original_image_width: Original image width in pixels (for edit models, optional)
+        original_image_height: Original image height in pixels (for edit models, optional)
+        target_image_width: Target image width in pixels (for edit models, optional)
+        target_image_height: Target image height in pixels (for edit models, optional)
+        image_guidance_scale: Image guidance scale for edit models (typically 1.5, optional)
     """
     model: str
     steps: int
@@ -139,6 +144,11 @@ class ImageGenerationConfig:
     cfg_zero_init_steps: int = 0
     causal_inference_pad: int = 0
     tea_cache: bool = False
+    original_image_width: Optional[int] = None
+    original_image_height: Optional[int] = None
+    target_image_width: Optional[int] = None
+    target_image_height: Optional[int] = None
+    image_guidance_scale: Optional[float] = None
 
     def __post_init__(self):
         """Generate random seed if not provided."""
@@ -172,14 +182,35 @@ class ImageGenerationConfig:
             SamplerType.SamplerType.UniPC
         )
 
+        # Convert pixels to scale units (server always uses 64 as divisor)
+        scale_width = self.width // 64
+        scale_height = self.height // 64
+
         # Build GenerationConfiguration
         GenerationConfiguration.Start(builder)
         GenerationConfiguration.AddId(builder, 0)
-        GenerationConfiguration.AddStartWidth(builder, self.width)
-        GenerationConfiguration.AddStartHeight(builder, self.height)
+        GenerationConfiguration.AddStartWidth(builder, scale_width)
+        GenerationConfiguration.AddStartHeight(builder, scale_height)
+
+        # Add edit-specific image dimensions if provided (for edit models like Qwen Edit)
+        # IMPORTANT: These must be added early, before Seed
+        if self.original_image_width is not None:
+            GenerationConfiguration.AddOriginalImageWidth(builder, self.original_image_width)
+        if self.original_image_height is not None:
+            GenerationConfiguration.AddOriginalImageHeight(builder, self.original_image_height)
+        if self.target_image_width is not None:
+            GenerationConfiguration.AddTargetImageWidth(builder, self.target_image_width)
+        if self.target_image_height is not None:
+            GenerationConfiguration.AddTargetImageHeight(builder, self.target_image_height)
+
         GenerationConfiguration.AddSeed(builder, self.seed)
         GenerationConfiguration.AddSteps(builder, self.steps)
         GenerationConfiguration.AddGuidanceScale(builder, self.cfg_scale)
+
+        # Add ImageGuidanceScale if provided (for edit models)
+        if self.image_guidance_scale is not None:
+            GenerationConfiguration.AddImageGuidanceScale(builder, self.image_guidance_scale)
+
         GenerationConfiguration.AddStrength(builder, self.strength)
         GenerationConfiguration.AddModel(builder, model_offset)
         GenerationConfiguration.AddSampler(builder, sampler_type)
@@ -341,6 +372,7 @@ class DrawThingsClient:
         negative_prompt: str = "",
         scale_factor: int = 1,
         input_image: Optional[bytes] = None,
+        metadata_override: Optional[any] = None,
         progress_callback: Optional[Callable[[str, int], None]] = None,
         preview_callback: Optional[Callable[[bytes], None]] = None
     ) -> List[bytes]:
@@ -353,6 +385,8 @@ class DrawThingsClient:
             scale_factor: Image scale factor
             input_image: Optional input image bytes (PIL Image format) for img2img/edit.
                         Will be automatically resized to match config dimensions.
+            metadata_override: Optional MetadataOverride protobuf object for LoRA metadata.
+                              Used when LoRAs need to be specified with version info.
             progress_callback: Optional callback for progress updates.
                                Called with (stage_name, step_number)
             preview_callback: Optional callback for preview images.
@@ -424,6 +458,10 @@ class DrawThingsClient:
         if image_hash is not None and image_tensor is not None:
             request_kwargs['image'] = image_hash
             request_kwargs['contents'] = [image_tensor]
+
+        # Add metadata override if provided (for LoRA metadata)
+        if metadata_override is not None:
+            request_kwargs['override'] = metadata_override
 
         request = imageService_pb2.ImageGenerationRequest(**request_kwargs)
 

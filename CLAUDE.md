@@ -186,7 +186,7 @@ description = vision_processor.analyze_image(
 3. **Bofonchio MC's Restyler**: User uploads image, vision LLM analyzes and describes the visual style in detail
 4. **Prompt Refinement**: User requests modifications, LLM adjusts prompt intelligently
 5. **Direct Mode**: User writes complete prompt, uses as-is for generation
-6. **Edit Image**: ⚠️ Non-functional - Image editing feature currently not working
+6. **Edit Image**: Upload image and provide text instructions to edit it (works with Qwen Edit, Flux Kontext, etc.)
 
 ### UI Implementation (Gradio)
 - Tabbed interface with Settings, Expand, Extract, Bofonchio MC's Restyler, Refine, Direct, Edit Image, and Generate sections
@@ -231,10 +231,11 @@ description = vision_processor.analyze_image(
 ### Working with gRPC
 When implementing image generation:
 1. Always query model metadata first to get correct latent_size
-2. Calculate scale factors properly: `scale = pixels // latent_size`
+2. Calculate scale factors properly: `scale = pixels // 64` (universal formula)
 3. Use appropriate clip_skip for the model (check model presets)
 4. Handle fpzip tensor compression for efficiency
 5. Verify server metadata response before generation
+6. For edit models: Set `ImageGuidanceScale` (typically 1.5) and `OriginalImageWidth/Height` + `TargetImageWidth/Height` fields in the configuration
 
 ### Working with ModuLLe
 When implementing LLM features:
