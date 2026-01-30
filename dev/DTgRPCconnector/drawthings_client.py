@@ -108,6 +108,7 @@ class ImageGenerationConfig:
         cfg_zero_init_steps: CFG zero initialization steps
         causal_inference_pad: Causal inference padding
         tea_cache: Enable TeaCache acceleration (timestep embedding aware cache)
+        stochastic_sampling_gamma: Strategic Stochastic Sampling gamma for TCD sampler (0.0-1.0, default 0.3)
         original_image_width: Original image width in pixels (for edit models, optional)
         original_image_height: Original image height in pixels (for edit models, optional)
         target_image_width: Target image width in pixels (for edit models, optional)
@@ -144,6 +145,7 @@ class ImageGenerationConfig:
     cfg_zero_init_steps: int = 0
     causal_inference_pad: int = 0
     tea_cache: bool = False
+    stochastic_sampling_gamma: float = 0.3
     original_image_width: Optional[int] = None
     original_image_height: Optional[int] = None
     target_image_width: Optional[int] = None
@@ -246,6 +248,7 @@ class ImageGenerationConfig:
         GenerationConfiguration.AddCfgZeroInitSteps(builder, self.cfg_zero_init_steps)
         GenerationConfiguration.AddCausalInferencePad(builder, self.causal_inference_pad)
         GenerationConfiguration.AddTeaCache(builder, self.tea_cache)
+        GenerationConfiguration.AddStochasticSamplingGamma(builder, self.stochastic_sampling_gamma)
 
         config = GenerationConfiguration.End(builder)
 

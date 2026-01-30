@@ -447,12 +447,12 @@ SAMPLER_NAMES = list(SAMPLERS.keys())
 SAMPLER_DEFAULT = "DPM++ 2M Karras"  # Index 0, universally supported
 
 
-def on_preset_selected(preset_name: str) -> Tuple[int, float, str, str, float, bool, int, bool, bool, int, int, float, int, bool]:
+def on_preset_selected(preset_name: str) -> Tuple[int, float, str, str, float, bool, int, bool, bool, int, int, float, int, bool, any]:
     """When a preset is selected, apply its settings"""
     if preset_name == "Custom (no preset)" or not preset_name:
         return (gr.update(), gr.update(), "Using custom settings",
                 gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(),
-                gr.update(), gr.update(), gr.update(), gr.update())
+                gr.update(), gr.update(), gr.update(), gr.update(), gr.update())
 
     preset = settings.get_model_preset(preset_name)
     if preset:
@@ -481,15 +481,24 @@ def on_preset_selected(preset_name: str) -> Tuple[int, float, str, str, float, b
         clip_skip = preset.get('clip_skip', 1)  # Pony needs 2, most others need 1
         tea_cache = preset.get('teaCache', False)
 
+        # Update aspect ratios based on preset's base_resolution
+        base_resolution = preset.get('base_resolution', 1024)
+        state.current_model_base_resolution = base_resolution
+        aspect_ratios = settings.load_aspect_ratios(base_resolution)
+        aspect_choices = [label for label, _, _ in aspect_ratios]
+        # Default to square aspect ratio (usually 4th or 5th in list)
+        default_aspect = aspect_choices[4] if len(aspect_choices) > 4 else aspect_choices[0]
+
         notes = preset.get('notes', '')
-        info = f"✅ Preset applied: {preset.get('name', 'Unknown')}\n{notes}"
+        info = f"✅ Preset applied: {preset.get('name', 'Unknown')}\nBase resolution: {base_resolution}px\n{notes}"
 
         return (steps, cfg, info, sampler_name, shift, res_shift, seed_mode, cfg_zero,
-                hires_fix, hires_fix_start_width, hires_fix_start_height, hires_fix_strength, clip_skip, tea_cache)
+                hires_fix, hires_fix_start_width, hires_fix_start_height, hires_fix_strength, clip_skip, tea_cache,
+                gr.update(choices=aspect_choices, value=default_aspect))
     else:
         return (gr.update(), gr.update(), f"⚠️ Preset not found: {preset_name}",
                 gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(),
-                gr.update(), gr.update(), gr.update(), gr.update(), gr.update())
+                gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update())
 
 
 def on_negative_prompt_preset_selected(preset_name: str) -> str:
@@ -510,7 +519,7 @@ def generate_image(prompt: str, model: str, lora1: str, lora1_weight: float, lor
                   seed: int, negative_prompt: str,
                   shift: float, res_dependent_shift: bool, seed_mode: int,
                   cfg_zero_star: bool, hires_fix: bool, hires_fix_start_width: int, hires_fix_start_height: int,
-                  hires_fix_strength: float, clip_skip: int, tea_cache: bool, progress=gr.Progress()):
+                  hires_fix_strength: float, clip_skip: int, tea_cache: bool, tcd_gamma: float, progress=gr.Progress()):
     """Generate image using Draw Things gRPC with progress tracking"""
     if not state.grpc_client:
         return None, "❌ gRPC not initialized. Configure in Settings tab first."
@@ -540,25 +549,16 @@ def generate_image(prompt: str, model: str, lora1: str, lora1_weight: float, lor
             print(f"   Version: {version}")
             print(f"   Latent Size: {latent_size}")
             print(f"   Default Scale: {model_info.get('default_scale', 'N/A')}")
-
-            # Determine base resolution from version (not latent_size!)
-            # FLUX/Z-Image/Qwen/SD3 use 64-latent but 1024px output
-            # SDXL uses 128-latent with 1024px output
-            # SD 1.5/2.x use 64-latent with 512px output
-            if version in ['flux1', 'z_image', 'qwen_image', 'sd3', 'sd3_large', 'sdxl', 'sdxl_base_v0.9']:
-                base_resolution = 1024
-            elif version in ['v1', 'v2']:
-                base_resolution = 512
-            else:
-                # Fallback based on latent size
-                base_resolution = 512 if latent_size == 64 else 1024
-
-            print(f"   → Base Resolution: {base_resolution}")
         except Exception as e:
             # Fallback: assume SDXL
             print(f"\n⚠️  Failed to get model metadata: {e}")
             latent_size = 128
-            base_resolution = 1024
+            version = 'sdxl'
+
+        # Use the base resolution that was set by model/preset selection
+        # This ensures aspect ratios match what's in the dropdown
+        base_resolution = state.current_model_base_resolution
+        print(f"   → Base Resolution (from state): {base_resolution}")
 
         # Parse aspect ratio to get width and height using correct base resolution
         # Format: "ratio widthxheight"
@@ -746,6 +746,9 @@ def generate_image(prompt: str, model: str, lora1: str, lora1_weight: float, lor
         # Performance optimizations
         GenerationConfiguration.AddTeaCache(builder, tea_cache)
 
+        # TCD sampler parameter
+        GenerationConfiguration.AddStochasticSamplingGamma(builder, tcd_gamma)
+
         config = GenerationConfiguration.End(builder)
         builder.Finish(config)
         config_bytes = bytes(builder.Output())
@@ -852,7 +855,7 @@ def generate_image(prompt: str, model: str, lora1: str, lora1_weight: float, lor
 def edit_image(input_image, instruction: str, model: str, steps: int, cfg_scale: float,
                sampler_name: str, strength: float, lora1: str, lora1_weight: float,
                lora2: str, lora2_weight: float, negative_prompt: str, seed: int,
-               clip_skip: int, shift: float, res_dependent_shift: bool, progress=gr.Progress()) -> Tuple[any, str]:
+               clip_skip: int, shift: float, res_dependent_shift: bool, tcd_gamma: float, progress=gr.Progress()) -> Tuple[any, str]:
     """Edit an image using AI instructions (img2img with edit models like Qwen Edit)"""
     if not state.grpc_client:
         return None, "❌ gRPC not initialized. Configure in Settings tab first."
@@ -1053,6 +1056,7 @@ def edit_image(input_image, instruction: str, model: str, steps: int, cfg_scale:
         GenerationConfiguration.AddShift(builder, final_shift)
         GenerationConfiguration.AddSeedMode(builder, 2)
         GenerationConfiguration.AddClipSkip(builder, clip_skip)
+        GenerationConfiguration.AddStochasticSamplingGamma(builder, tcd_gamma)
 
         print(f"[DEBUG] FlatBuffer fields:")
         print(f"  StartWidth/Height: {scale_width}×{scale_height} scale units")
@@ -1577,6 +1581,13 @@ def create_ui():
                                 value=SAMPLER_DEFAULT,
                                 label="Sampler"
                             )
+                            edit_tcd_gamma = gr.Slider(
+                                0.0, 1.0, 0.3,
+                                label="TCD Strategic Stochastic Sampling",
+                                step=0.05,
+                                visible=False,
+                                info="Strategic Stochastic Sampling gamma for TCD sampler (higher = more stochastic)"
+                            )
                             edit_strength = gr.Slider(
                                 0.0, 1.0, 0.75,
                                 label="Strength",
@@ -1886,6 +1897,14 @@ def create_ui():
                     label="Sampler"
                 )
 
+                gen_tcd_gamma = gr.Slider(
+                    0.0, 1.0, 0.3,
+                    label="TCD Strategic Stochastic Sampling",
+                    step=0.05,
+                    visible=False,
+                    info="Strategic Stochastic Sampling gamma for TCD sampler (higher = more stochastic)"
+                )
+
                 gen_clip_skip = gr.Slider(
                     1, 12, 1,
                     label="CLIP Skip",
@@ -2017,7 +2036,7 @@ def create_ui():
             inputs=[gen_preset],
             outputs=[gen_steps, gen_cfg, gen_preset_info, gen_sampler,
                     gen_shift, gen_res_shift, gen_seed_mode, gen_cfg_zero, gen_hires,
-                    gen_hires_start_width, gen_hires_start_height, gen_hires_strength, gen_clip_skip, gen_tea_cache]
+                    gen_hires_start_width, gen_hires_start_height, gen_hires_strength, gen_clip_skip, gen_tea_cache, gen_aspect]
         )
 
         # Toggle hires fix controls visibility
@@ -2025,6 +2044,13 @@ def create_ui():
             fn=lambda enabled: gr.update(visible=enabled),
             inputs=[gen_hires],
             outputs=[gen_hires_row]
+        )
+
+        # Toggle TCD gamma slider visibility based on sampler
+        gen_sampler.change(
+            fn=lambda sampler: gr.update(visible=(sampler == "TCD")),
+            inputs=[gen_sampler],
+            outputs=[gen_tcd_gamma]
         )
 
         # Negative prompt preset selection
@@ -2040,7 +2066,7 @@ def create_ui():
             inputs=[gen_prompt, gen_model, gen_lora1, gen_lora1_weight, gen_lora2, gen_lora2_weight,
                    gen_steps, gen_cfg, gen_sampler, gen_aspect, gen_resolution_scale, gen_seed, gen_negative,
                    gen_shift, gen_res_shift, gen_seed_mode, gen_cfg_zero, gen_hires,
-                   gen_hires_start_width, gen_hires_start_height, gen_hires_strength, gen_clip_skip, gen_tea_cache],
+                   gen_hires_start_width, gen_hires_start_height, gen_hires_strength, gen_clip_skip, gen_tea_cache, gen_tcd_gamma],
             outputs=[gen_image, gen_status]
         )
 
@@ -2073,7 +2099,7 @@ def create_ui():
             inputs=[edit_image_input, edit_instruction, edit_model, edit_steps, edit_cfg,
                    edit_sampler, edit_strength, edit_lora1, edit_lora1_weight,
                    edit_lora2, edit_lora2_weight, edit_negative, edit_seed,
-                   edit_clip_skip, edit_shift, edit_res_shift],
+                   edit_clip_skip, edit_shift, edit_res_shift, edit_tcd_gamma],
             outputs=[edit_result_image, edit_status]
         )
 
@@ -2082,6 +2108,13 @@ def create_ui():
             fn=lambda model_name: on_model_selected(model_name)[0:2],  # Return preset dropdown and info only
             inputs=[edit_model],
             outputs=[edit_preset, edit_preset_info]
+        )
+
+        # Toggle TCD gamma slider visibility in Edit tab
+        edit_sampler.change(
+            fn=lambda sampler: gr.update(visible=(sampler == "TCD")),
+            inputs=[edit_sampler],
+            outputs=[edit_tcd_gamma]
         )
 
         # Edit tab preset selection updates settings (only the ones that exist in Edit tab)

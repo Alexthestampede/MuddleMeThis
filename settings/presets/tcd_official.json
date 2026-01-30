@@ -1,0 +1,10 @@
+{
+  "name": "TCD (Trajectory Consistency Distillation)",
+  "description": "Fast generation with TCD sampler - requires TCD LoRA for best results",
+  "base_resolution": 1024,
+  "clip_skip": 1,
+  "recommended_steps": 6,
+  "recommended_cfg": 2.0,
+  "sampler": "TCD",
+  "notes": "Use 4-8 steps with CFG 1.0-3.0. Works with SD1.5/SDXL. Requires TCD LoRA. Strategic Stochastic Sampling gamma defaults to 0.3 (30%)"
+}

@@ -322,6 +322,12 @@ def GenerationConfigurationAddTiledDecoding(builder, tiledDecoding):
 def AddTiledDecoding(builder, tiledDecoding):
     GenerationConfigurationAddTiledDecoding(builder, tiledDecoding)
 
+def GenerationConfigurationAddStochasticSamplingGamma(builder, stochasticSamplingGamma):
+    builder.PrependFloat32Slot(57, stochasticSamplingGamma, 0.3)
+
+def AddStochasticSamplingGamma(builder, stochasticSamplingGamma):
+    GenerationConfigurationAddStochasticSamplingGamma(builder, stochasticSamplingGamma)
+
 def GenerationConfigurationAddPreserveOriginalAfterInpaint(builder, preserveOriginalAfterInpaint):
     builder.PrependBoolSlot(58, preserveOriginalAfterInpaint, 1)
 
