@@ -15,6 +15,7 @@ import sys
 import os
 import subprocess
 import time
+import hashlib
 from pathlib import Path
 from typing import Optional, Tuple, List
 from datetime import datetime
@@ -48,7 +49,7 @@ try:
     import GenerationConfiguration
     import imageService_pb2
     import LoRA
-    from drawthings_client import DrawThingsClient
+    from drawthings_client import DrawThingsClient, ImageGenerationConfig, LoRAConfig
     from model_metadata import ModelMetadata
     from tensor_decoder import tensor_to_pil
     GRPC_AVAILABLE = True
@@ -514,21 +515,81 @@ def on_negative_prompt_preset_selected(preset_name: str) -> str:
         return gr.update()
 
 
+def decode_preview(data: bytes) -> Optional[Image.Image]:
+    """Decode a preview image from gRPC response.
+
+    The server sends previews as CCV tensors. These may be:
+    - Latent space (e.g. 128x128x16): visualize first 3 channels, upscaled
+    - Pixel space (e.g. WxHx3/4): decode like a normal tensor
+    Returns a PIL Image or None on failure.
+    """
+    import struct as _struct
+    try:
+        if len(data) < 68:
+            return None
+        hdr = _struct.unpack_from('<9I', data, 0)
+        channels = hdr[8]
+        height = hdr[6]
+        width = hdr[7]
+
+        if channels in (3, 4):
+            # Standard pixel-space tensor
+            return tensor_to_pil(data)
+
+        # Latent-space preview (16 channels, etc.)
+        # Decompress the tensor and visualize first 3 channels
+        import numpy as np
+        import fpzip
+        compressed_data = data[68:]
+        float_data = fpzip.decompress(compressed_data, order='C')
+        if float_data.ndim == 4:
+            float_data = float_data[0]  # Remove batch dim
+
+        # Take first 3 channels as pseudo-RGB
+        rgb = float_data[:, :, :3]
+
+        # Normalize per-channel to [0, 255] for visibility
+        for c in range(3):
+            ch = rgb[:, :, c]
+            ch_min, ch_max = ch.min(), ch.max()
+            if ch_max - ch_min > 1e-6:
+                rgb[:, :, c] = (ch - ch_min) / (ch_max - ch_min)
+            else:
+                rgb[:, :, c] = 0.5
+
+        img_array = (rgb * 255).clip(0, 255).astype(np.uint8)
+        preview = Image.fromarray(img_array, 'RGB')
+
+        # Upscale small latent previews so they're visible in the UI
+        if width < 256 or height < 256:
+            scale = max(1, 512 // max(width, height))
+            preview = preview.resize((width * scale, height * scale), Image.Resampling.NEAREST)
+
+        return preview
+    except Exception as e:
+        print(f"   ⚠️  Preview decode failed: {e}")
+        return None
+
+
 def generate_image(prompt: str, model: str, lora1: str, lora1_weight: float, lora2: str, lora2_weight: float,
                   steps: int, cfg_scale: float, sampler_name: str, aspect_ratio: str, resolution_scale: str,
                   seed: int, negative_prompt: str,
                   shift: float, res_dependent_shift: bool, seed_mode: int,
                   cfg_zero_star: bool, hires_fix: bool, hires_fix_start_width: int, hires_fix_start_height: int,
-                  hires_fix_strength: float, clip_skip: int, tea_cache: bool, tcd_gamma: float, progress=gr.Progress()):
-    """Generate image using Draw Things gRPC with progress tracking"""
+                  hires_fix_strength: float, clip_skip: int, tea_cache: bool, tcd_gamma: float,
+                  live_preview: bool = False, progress=gr.Progress()):
+    """Generate image using Draw Things gRPC with progress tracking (generator for live preview)"""
     if not state.grpc_client:
-        return None, "❌ gRPC not initialized. Configure in Settings tab first."
+        yield None, "❌ gRPC not initialized. Configure in Settings tab first."
+        return
 
     if not prompt:
-        return None, "❌ No prompt provided"
+        yield None, "❌ No prompt provided"
+        return
 
     if not model:
-        return None, "❌ No model selected"
+        yield None, "❌ No model selected"
+        return
 
     # Translate display names to actual filenames for gRPC
     model_file = state.model_name_to_file.get(model, model)
@@ -788,6 +849,13 @@ def generate_image(prompt: str, model: str, lora1: str, lora1_weight: float, lor
                 elif signpost.HasField('imageDecoded'):
                     progress(0.98, desc="Image decoded")
 
+            # Handle preview images (live preview during sampling)
+            # Yield image only, gr.update() leaves status/progress untouched
+            if live_preview and response.HasField('previewImage') and response.previewImage:
+                preview_pil = decode_preview(response.previewImage)
+                if preview_pil is not None:
+                    yield preview_pil, gr.update()
+
             # Collect generated images
             if response.generatedImages:
                 generated_images.extend(response.generatedImages)
@@ -842,49 +910,39 @@ def generate_image(prompt: str, model: str, lora1: str, lora1_weight: float, lor
             final_status += f"Actual seed: {actual_seed}\n"
             final_status += f"💾 Saved: {filename}"
 
-            return pil_image, final_status
+            yield pil_image, final_status
         else:
-            return None, status + "❌ No images generated"
+            yield None, status + "❌ No images generated"
 
     except Exception as e:
         import traceback
         error_details = traceback.format_exc()
-        return None, f"❌ Error during generation:\n{str(e)}\n\nDetails:\n{error_details}"
+        yield None, f"❌ Error during generation:\n{str(e)}\n\nDetails:\n{error_details}"
 
 
 def edit_image(input_image, instruction: str, model: str, steps: int, cfg_scale: float,
                sampler_name: str, strength: float, lora1: str, lora1_weight: float,
                lora2: str, lora2_weight: float, negative_prompt: str, seed: int,
-               clip_skip: int, shift: float, res_dependent_shift: bool, tcd_gamma: float, progress=gr.Progress()) -> Tuple[any, str]:
-    """Edit an image using AI instructions (img2img with edit models like Qwen Edit)"""
+               clip_skip: int, shift: float, res_dependent_shift: bool, tcd_gamma: float,
+               live_preview: bool = False, progress=gr.Progress()) -> Tuple[any, str]:
+    """Edit an image using AI instructions (generator for live preview)"""
     if not state.grpc_client:
-        return None, "❌ gRPC not initialized. Configure in Settings tab first."
+        yield None, "❌ gRPC not initialized. Configure in Settings tab first."
+        return
 
     if input_image is None:
-        return None, "❌ No input image provided"
+        yield None, "❌ No input image provided"
+        return
 
     if not instruction or not instruction.strip():
-        return None, "❌ No edit instruction provided"
+        yield None, "❌ No edit instruction provided"
+        return
 
     if not model:
-        return None, "❌ No model selected"
+        yield None, "❌ No model selected"
+        return
 
-    # Import tensor encoding functions
-    from PIL import Image
-    import hashlib
-    import time
-    import sys
-    import importlib
-    sys.path.insert(0, str(Path(__file__).parent / 'dev' / 'DTgRPCconnector'))
-
-    # Force reload to ensure we use latest version
-    import tensor_encoder
-    import tensor_decoder
-    importlib.reload(tensor_encoder)
-    importlib.reload(tensor_decoder)
-
-    from tensor_encoder import encode_image_to_tensor
-    from tensor_decoder import tensor_to_pil
+    import math
 
     start_time = time.time()
 
@@ -895,245 +953,116 @@ def edit_image(input_image, instruction: str, model: str, steps: int, cfg_scale:
 
         # Translate display name to actual filename
         model_file = state.model_name_to_file.get(model, model)
-        print(f"[DEBUG] Edit: Model display='{model}' → file='{model_file}'")
-
-        # Detect model version from metadata for proper LoRA handling
-        model_version = 'qwenImage'  # Default for Qwen Edit models
-        try:
-            if state.grpc_metadata:
-                model_info = state.grpc_metadata.get_latent_info(model_file)
-                detected_version = model_info.get('version', 'qwenImage')
-                model_version = detected_version
-                print(f"[DEBUG] Detected model version: {model_version}")
-        except Exception as e:
-            print(f"[DEBUG] Could not detect model version, using default: {e}")
 
         status = f"🎨 Editing image...\n\n"
         status += f"📝 Instruction: {instruction}\n"
         status += f"🤖 Model: {model}\n"
         status += f"⚙️  Steps: {steps}, CFG: {cfg_scale}\n"
         status += f"🎲 Sampler: {sampler_name}\n"
-        status += f"💪 Strength: {strength}"
-
-        # Note about strength for edit models
-        if strength == 1.0:
-            status += " (edit models like Qwen Edit use strength=1.0)\n"
-        elif strength < 0.5:
-            status += " (subtle edit - may not change much)\n"
-        elif strength >= 0.7:
-            status += " (strong edit)\n"
-        else:
-            status += " (moderate edit)\n"
-
+        status += f"💪 Strength: {strength}\n"
         status += f"📐 Input: {original_size[0]}×{original_size[1]} pixels\n"
 
-        # CRITICAL: Calculate target dimensions based on input image
+        # Cap to max resolution (edit models work at 1024-1536px, not 4K)
+        MAX_EDIT_PIXELS = 2048
+        longest_side = max(pil_img.width, pil_img.height)
+        if longest_side > MAX_EDIT_PIXELS:
+            scale_down = MAX_EDIT_PIXELS / longest_side
+            new_w = int(pil_img.width * scale_down)
+            new_h = int(pil_img.height * scale_down)
+            pil_img = pil_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+            status += f"📐 Downscaled to: {new_w}×{new_h} pixels (max {MAX_EDIT_PIXELS}px)\n"
+
         # Round to nearest 64 pixels to match model requirements
         target_width = ((pil_img.width + 32) // 64) * 64
         target_height = ((pil_img.height + 32) // 64) * 64
 
-        # Resize if needed (required to prevent crashes)
         if pil_img.size != (target_width, target_height):
-            status += f"📐 Resizing to: {target_width}×{target_height} pixels (64-pixel aligned)\n\n"
+            status += f"📐 Aligned to: {target_width}×{target_height} pixels (64-pixel aligned)\n\n"
             pil_img = pil_img.resize((target_width, target_height), Image.Resampling.LANCZOS)
         else:
             status += f"📐 Image already 64-pixel aligned\n\n"
 
         progress(0.1, desc="Encoding input image...")
 
-        # Save PIL image temporarily to encode it
-        import tempfile
-        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
-            pil_img.save(tmp.name)
-            # CRITICAL: Encoder now uses complete header format matching server
-            tensor_bytes = encode_image_to_tensor(tmp.name, compress=True)
-            Path(tmp.name).unlink()  # Clean up temp file
-
-        # Calculate SHA256 hash
-        hash_digest = hashlib.sha256(tensor_bytes).digest()
-        hash_hex = hash_digest.hex()
-
-        # Verify hash by re-calculating from contents
-        verify_hash = hashlib.sha256(tensor_bytes).hexdigest()
-        hash_match = (verify_hash == hash_hex)
-
-        status += f"📦 Encoded: {len(tensor_bytes):,} bytes\n"
-        status += f"🔑 Hash: {hash_hex[:16]}...\n"
-        status += f"✓ Hash verified: {hash_match}\n\n"
-
-        # Debug: verify tensor encoding
-        print(f"[DEBUG] Tensor size: {len(tensor_bytes)} bytes")
-        print(f"[DEBUG] SHA256: {hash_hex}")
-        print(f"[DEBUG] Sending via hints (shuffle type) with weight=1.0")
-
-        progress(0.2, desc="Building configuration...")
-
-        # Build FlatBuffer configuration
-        builder = flatbuffers.Builder(2048)
-        model_offset = builder.CreateString(model_file)
-
-        # Build LoRAs (supports 0, 1, or 2 LoRAs)
-        lora_offsets = []
-        for lora_name, lora_weight in [(lora1, lora1_weight), (lora2, lora2_weight)]:
-            if lora_name and lora_name != "None" and lora_name.strip():
-                # Translate display name to filename
-                if hasattr(state, 'lora_name_to_file') and state.lora_name_to_file:
-                    lora_file = state.lora_name_to_file.get(lora_name, lora_name)
-                else:
-                    lora_file = lora_name
-
-                status += f"🎨 LoRA: {lora_name} (weight: {lora_weight})\n"
-
-                lora_file_offset = builder.CreateString(lora_file)
-                LoRA.Start(builder)
-                LoRA.AddFile(builder, lora_file_offset)
-                LoRA.AddWeight(builder, lora_weight)
-                lora_offsets.append(LoRA.End(builder))
-
-        # Build loras vector
-        GenerationConfiguration.StartLorasVector(builder, len(lora_offsets))
-        for lora_offset in reversed(lora_offsets):
-            builder.PrependUOffsetTRelative(lora_offset)
-        loras_vector = builder.EndVector()
-
-        # Empty controls vector
-        GenerationConfiguration.StartControlsVector(builder, 0)
-        controls_vector = builder.EndVector()
-
-        # Build configuration (img2img mode with strength)
-        # IMPORTANT: Calculate separate scales for width and height
-        # Use the resized (64-pixel aligned) dimensions
-        scale_width = target_width // 64
-        scale_height = target_height // 64
-
-        # Get sampler ID from name
-        sampler_id = SAMPLERS.get(sampler_name, 0)
-
         # Handle seed (-1 = random)
         actual_seed = seed if seed >= 0 else random_module.randint(0, 2**32 - 1)
 
         # Calculate resolution-dependent shift if enabled (FLUX models)
         if res_dependent_shift:
-            import math
-            # Resolution factor: pixel area divided by 256
-            # Use target dimensions (in pixels), not scale units!
             resolution_factor = (target_width * target_height) / 256
             final_shift = math.exp(((resolution_factor - 256) * (1.15 - 0.5) / (4096 - 256)) + 0.5)
             status += f"📐 Resolution-dependent shift: {final_shift:.2f} (calculated from {target_width}×{target_height})\n"
         else:
             final_shift = shift
 
-        status += f"⚙️ Config: {scale_width}×{scale_height} scale units\n"
-        status += f"   Seed: {actual_seed}, Shift: {final_shift:.3f}\n"
-        status += f"   CLIP Skip: {clip_skip}, LoRAs: {len(lora_offsets)}\n\n"
-
-        # Debug: log full configuration
-        print(f"[DEBUG] Config: model={model_file}, steps={steps}, cfg={cfg_scale}, strength={strength}")
-        print(f"[DEBUG] Sampler: {sampler_name} (id={sampler_id}), shift={final_shift}")
-        print(f"[DEBUG] Resolution: {scale_width}×{scale_height} scale units ({target_width}×{target_height} pixels)")
-        print(f"[DEBUG] Original input: {original_size[0]}×{original_size[1]} pixels")
-
-        GenerationConfiguration.Start(builder)
-        GenerationConfiguration.AddId(builder, 0)
-        GenerationConfiguration.AddStartWidth(builder, scale_width)
-        GenerationConfiguration.AddStartHeight(builder, scale_height)
-        # CRITICAL: For edit models, also set original/target image dimensions
-        GenerationConfiguration.AddOriginalImageWidth(builder, target_width)
-        GenerationConfiguration.AddOriginalImageHeight(builder, target_height)
-        GenerationConfiguration.AddTargetImageWidth(builder, target_width)
-        GenerationConfiguration.AddTargetImageHeight(builder, target_height)
-        GenerationConfiguration.AddSeed(builder, actual_seed)
-        GenerationConfiguration.AddSteps(builder, steps)
-        GenerationConfiguration.AddGuidanceScale(builder, cfg_scale)
-        GenerationConfiguration.AddImageGuidanceScale(builder, 1.5)  # CRITICAL for edit models!
-        GenerationConfiguration.AddStrength(builder, strength)  # IMG2IMG strength
-        GenerationConfiguration.AddModel(builder, model_offset)
-        GenerationConfiguration.AddSampler(builder, sampler_id)
-        GenerationConfiguration.AddBatchCount(builder, 1)
-        GenerationConfiguration.AddBatchSize(builder, 1)
-        GenerationConfiguration.AddControls(builder, controls_vector)
-        GenerationConfiguration.AddLoras(builder, loras_vector)
-        GenerationConfiguration.AddShift(builder, final_shift)
-        GenerationConfiguration.AddSeedMode(builder, 2)
-        GenerationConfiguration.AddClipSkip(builder, clip_skip)
-        GenerationConfiguration.AddStochasticSamplingGamma(builder, tcd_gamma)
-
-        print(f"[DEBUG] FlatBuffer fields:")
-        print(f"  StartWidth/Height: {scale_width}×{scale_height} scale units")
-        print(f"  OriginalImageWidth/Height: {target_width}×{target_height} pixels")
-        print(f"  TargetImageWidth/Height: {target_width}×{target_height} pixels")
-        print(f"  ImageGuidanceScale: 1.5")
-        print(f"  Strength: {strength}")
-        print(f"  LoRAs in config: {len(lora_offsets)}")
-
-        config = GenerationConfiguration.End(builder)
-        builder.Finish(config)
-        config_bytes = bytes(builder.Output())
-
-        # Create gRPC request with image AS HINT (not as image field!)
-        # CRITICAL: For edit models like Qwen Edit, use hints with hintType="shuffle"
-        import json
-
-        # Build LoRA metadata list
-        lora_metadata = []
-        for lora_name, lora_weight in [(lora1, lora1_weight), (lora2, lora2_weight)]:
-            if lora_name and lora_name != "None" and lora_name.strip() and lora_weight > 0:
-                # Translate display name to filename
+        # Build LoRA list
+        loras = []
+        for lora_name, lw in [(lora1, lora1_weight), (lora2, lora2_weight)]:
+            if lora_name and lora_name != "None" and lora_name.strip():
                 if hasattr(state, 'lora_name_to_file') and state.lora_name_to_file:
                     lora_file = state.lora_name_to_file.get(lora_name, lora_name)
                 else:
                     lora_file = lora_name
+                loras.append(LoRAConfig(file=lora_file, weight=lw))
+                status += f"🎨 LoRA: {lora_name} (weight: {lw})\n"
 
-                lora_metadata.append({
-                    'file': lora_file,
-                    'weight': float(lora_weight),
-                    'version': model_version  # Detected from model metadata
-                })
+        status += f"⚙️ Seed: {actual_seed}, Shift: {final_shift:.3f}, CLIP Skip: {clip_skip}\n\n"
 
-        # Encode LoRA metadata as JSON
-        loras_json = json.dumps(lora_metadata).encode('utf-8') if lora_metadata else b''
+        progress(0.2, desc="Building configuration...")
 
-        # Create MetadataOverride with LoRA metadata
-        override = imageService_pb2.MetadataOverride(
-            loras=loras_json
-        ) if loras_json else imageService_pb2.MetadataOverride()
-
-        # Create hint with reference image (shuffle type for edit/reference)
-        tensor_and_weight = imageService_pb2.TensorAndWeight(
-            tensor=tensor_bytes,
-            weight=1.0  # Full influence from reference image
+        # Build generation config using the client API (for FlatBuffer serialization)
+        gen_config = ImageGenerationConfig(
+            model=model_file,
+            steps=steps,
+            width=target_width,
+            height=target_height,
+            cfg_scale=cfg_scale,
+            scheduler=sampler_name,
+            seed=actual_seed,
+            strength=strength,
+            clip_skip=clip_skip,
+            shift=final_shift,
+            image_guidance_scale=1.5,
+            original_image_width=target_width,
+            original_image_height=target_height,
+            target_image_width=target_width,
+            target_image_height=target_height,
+            stochastic_sampling_gamma=tcd_gamma,
+            resolution_dependent_shift=res_dependent_shift,
+            loras=loras,
         )
 
-        hint = imageService_pb2.HintProto(
-            hintType="shuffle",  # Type for reference/moodboard images
-            tensors=[tensor_and_weight]
-        )
+        # Serialize config to FlatBuffer bytes
+        config_bytes = gen_config.to_flatbuffer()
 
-        print(f"[DEBUG] Created hint: type='shuffle', tensors=1, weight=1.0")
-
-        request = imageService_pb2.ImageGenerationRequest(
-            hints=[hint],  # Use hints instead of image field!
-            prompt=instruction,  # Edit instruction
-            negativePrompt=negative_prompt,  # Include negative prompt
-            configuration=config_bytes,
-            scaleFactor=1,
-            override=override,  # Include LoRA metadata!
-            user='MuddleMeThis',
-            device=imageService_pb2.LAPTOP,
-            contents=[tensor_bytes],  # Still provide actual image data
-            chunked=True  # Match regular generation
-        )
-
-        print(f"[DEBUG] Request created: prompt='{instruction[:50]}...', hints={len(request.hints)}, contents={len(request.contents)} items")
+        # Encode input image using client's encoder
+        image_tensor = state.grpc_client._encode_image(pil_img, target_width, target_height)
+        image_hash = hashlib.sha256(image_tensor).digest()
 
         status += "📡 Sending to server...\n"
         progress(0.3, desc="Sending image + instruction...")
 
-        # Generate with tracking
+        # Build gRPC request with image (content-addressable via hash)
+        request = imageService_pb2.ImageGenerationRequest(
+            prompt=instruction,
+            negativePrompt=negative_prompt if negative_prompt else '',
+            configuration=config_bytes,
+            scaleFactor=1,
+            user='MuddleMeThis',
+            device=imageService_pb2.LAPTOP,
+            chunked=True,
+            image=image_hash,
+            contents=[image_tensor],
+        )
+
+        # Stream response with live preview support
         generated_images = []
-        image_chunks = []  # Buffer for chunked responses
+        image_chunks = []
         image_was_encoded = False
+        current_step = 0
+
         for response in state.grpc_client.stub.GenerateImage(request):
+            # Handle progress signposts
             if response.HasField('currentSignpost'):
                 signpost = response.currentSignpost
                 if signpost.HasField('sampling'):
@@ -1144,32 +1073,34 @@ def edit_image(input_image, instruction: str, model: str, steps: int, cfg_scale:
                 elif signpost.HasField('imageEncoded'):
                     image_was_encoded = True
                     status += "✅ Server received input image\n"
-                    progress(0.40, desc="Input image encoded ✓")
+                    progress(0.40, desc="Input image encoded")
                 elif signpost.HasField('imageDecoded'):
                     progress(0.98, desc="Result decoded")
 
-            # Handle chunked responses properly
+            # Handle preview images (live preview during sampling)
+            # Yield image only, gr.update() leaves status/progress untouched
+            if live_preview and response.HasField('previewImage') and response.previewImage:
+                preview_pil = decode_preview(response.previewImage)
+                if preview_pil is not None:
+                    yield preview_pil, gr.update()
+
+            # Handle chunked responses
             if response.generatedImages:
                 for img_data in response.generatedImages:
                     image_chunks.append(img_data)
 
-                # Check if this is the last chunk
                 if response.chunkState == imageService_pb2.LAST_CHUNK:
-                    # Combine chunks if needed
                     if len(image_chunks) > 1:
                         combined = b''.join(image_chunks)
                         generated_images.append(combined)
                     elif len(image_chunks) == 1:
                         generated_images.append(image_chunks[0])
-                    image_chunks = []  # Reset for next image
+                    image_chunks = []
 
         if generated_images:
             progress(0.99, desc="Decoding result...")
 
-            # Decode tensor to PIL Image
             edited_pil = tensor_to_pil(generated_images[0])
-
-            # Calculate generation time
             elapsed = time.time() - start_time
 
             # Save to outputs
@@ -1181,7 +1112,6 @@ def edit_image(input_image, instruction: str, model: str, steps: int, cfg_scale:
             filename = f"edit_{timestamp}_{safe_instruction}.png"
             filepath = outputs_dir / filename
 
-            # Save with metadata
             metadata = PngInfo()
             metadata.add_text("prompt", instruction)
             metadata.add_text("strength", str(strength))
@@ -1189,29 +1119,28 @@ def edit_image(input_image, instruction: str, model: str, steps: int, cfg_scale:
             metadata.add_text("steps", str(steps))
             metadata.add_text("cfg_scale", str(cfg_scale))
             metadata.add_text("sampler", sampler_name)
+            metadata.add_text("seed", str(actual_seed))
+            metadata.add_text("shift", str(final_shift))
             metadata.add_text("edit_time", f"{elapsed:.1f}s")
             edited_pil.save(filepath, pnginfo=metadata)
 
             final_status = status + f"\n✅ Edit complete in {elapsed:.1f}s!\n"
             final_status += f"💾 Saved: {filename}\n"
 
-            # Warn if image wasn't encoded (means it was ignored)
             if not image_was_encoded:
                 final_status += "\n⚠️ WARNING: Server didn't encode input image!\n"
                 final_status += "   This means it generated from scratch, not editing.\n"
                 final_status += "   → Check model is an edit model (Qwen Edit, Flux Kontext, etc.)\n"
-                final_status += "   → Try adjusting strength (0.7-0.8 recommended)\n"
 
             progress(1.0, desc="Complete!")
-
-            return edited_pil, final_status
+            yield edited_pil, final_status
         else:
-            return None, status + "❌ No images generated"
+            yield None, status + "❌ No images generated"
 
     except Exception as e:
         import traceback
         error_details = traceback.format_exc()
-        return None, f"❌ Error during editing:\n{str(e)}\n\nDetails:\n{error_details}"
+        yield None, f"❌ Error during editing:\n{str(e)}\n\nDetails:\n{error_details}"
 
 
 
@@ -1535,8 +1464,7 @@ def create_ui():
             # ==================================================================
             with gr.Tab("🎨 Edit Image"):
                 gr.Markdown("### Edit an image using AI instructions")
-                gr.Markdown("⚠️ **WARNING: This feature is currently non-functional.** Image editing is not working correctly at this time.")
-                gr.Markdown("*Use edit models like **Qwen Image Edit** or **Flux Kontext** for best results*")
+                gr.Markdown("*Use edit models like **Qwen Image Edit**, **Flux Kontext**, or **Flux Klein** for best results*")
 
                 with gr.Row():
                     with gr.Column(scale=2):
@@ -1589,9 +1517,9 @@ def create_ui():
                                 info="Strategic Stochastic Sampling gamma for TCD sampler (higher = more stochastic)"
                             )
                             edit_strength = gr.Slider(
-                                0.0, 1.0, 0.75,
+                                0.0, 1.0, 1.0,
                                 label="Strength",
-                                info="How much to modify (0.75=recommended, 1.0=maximum change, 0.5=subtle)"
+                                info="How much to modify (1.0=full edit, 0.75=moderate, 0.5=subtle)"
                             )
 
                             # LoRA Support
@@ -2014,6 +1942,12 @@ def create_ui():
                         info="Timestep Embedding Aware Cache - accelerates generation (training-free)"
                     )
 
+                    gen_live_preview = gr.Checkbox(
+                        value=False,
+                        label="Live Preview",
+                        info="Show latent preview during sampling (experimental)"
+                    )
+
                     # Hidden placeholders for removed settings (kept for preset compatibility)
                     gen_cfg_zero = gr.Checkbox(value=False, visible=False)
 
@@ -2066,7 +2000,8 @@ def create_ui():
             inputs=[gen_prompt, gen_model, gen_lora1, gen_lora1_weight, gen_lora2, gen_lora2_weight,
                    gen_steps, gen_cfg, gen_sampler, gen_aspect, gen_resolution_scale, gen_seed, gen_negative,
                    gen_shift, gen_res_shift, gen_seed_mode, gen_cfg_zero, gen_hires,
-                   gen_hires_start_width, gen_hires_start_height, gen_hires_strength, gen_clip_skip, gen_tea_cache, gen_tcd_gamma],
+                   gen_hires_start_width, gen_hires_start_height, gen_hires_strength, gen_clip_skip, gen_tea_cache, gen_tcd_gamma,
+                   gen_live_preview],
             outputs=[gen_image, gen_status]
         )
 
@@ -2099,7 +2034,8 @@ def create_ui():
             inputs=[edit_image_input, edit_instruction, edit_model, edit_steps, edit_cfg,
                    edit_sampler, edit_strength, edit_lora1, edit_lora1_weight,
                    edit_lora2, edit_lora2_weight, edit_negative, edit_seed,
-                   edit_clip_skip, edit_shift, edit_res_shift, edit_tcd_gamma],
+                   edit_clip_skip, edit_shift, edit_res_shift, edit_tcd_gamma,
+                   gen_live_preview],
             outputs=[edit_result_image, edit_status]
         )
 
