@@ -5,7 +5,7 @@ grpcio>=1.60.0
 grpcio-tools>=1.60.0
 
 # FlatBuffers for configuration
-flatbuffers>=23.5.26
+flatbuffers>=24.3.0
 
 # Image processing
 Pillow>=10.0.0

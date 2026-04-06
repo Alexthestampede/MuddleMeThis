@@ -24,8 +24,8 @@ from datetime import datetime
 APP_VERSION = "1.0.0"
 
 # Suppress gRPC SSL handshake warnings (these are harmless when using self-signed certs)
-os.environ['GRPC_VERBOSITY'] = 'ERROR'
-os.environ['GRPC_TRACE'] = ''
+os.environ["GRPC_VERBOSITY"] = "ERROR"
+os.environ["GRPC_TRACE"] = ""
 
 # Add dev modules to path
 dev_path = Path(__file__).parent / "dev"
@@ -38,6 +38,7 @@ from settings_manager import settings
 # Import our libraries
 try:
     from modulle import create_ai_client
+
     MODULLE_AVAILABLE = True
 except ImportError:
     print("Warning: ModuLLe not installed. Install with: pip install -e dev/ModuLLe")
@@ -52,9 +53,12 @@ try:
     from drawthings_client import DrawThingsClient, ImageGenerationConfig, LoRAConfig
     from model_metadata import ModelMetadata
     from tensor_decoder import tensor_to_pil
+
     GRPC_AVAILABLE = True
 except ImportError as e:
-    print(f"Warning: DTgRPCconnector not installed. Install requirements from dev/DTgRPCconnector/requirements.txt")
+    print(
+        f"Warning: DTgRPCconnector not installed. Install requirements from dev/DTgRPCconnector/requirements.txt"
+    )
     print(f"Error: {e}")
     GRPC_AVAILABLE = False
 
@@ -63,8 +67,10 @@ except ImportError as e:
 # Configuration & State
 # ============================================================================
 
+
 class AppState:
     """Global application state"""
+
     def __init__(self):
         self.llm_client = None
         self.text_processor = None
@@ -76,7 +82,8 @@ class AppState:
         self.available_loras = []
         self.current_model_base_resolution = 1024  # Default
         self.model_name_to_file = {}  # Maps display names → filenames
-        self.lora_name_to_file = {}   # Maps display names → filenames
+        self.lora_name_to_file = {}  # Maps display names → filenames
+
 
 state = AppState()
 
@@ -85,25 +92,32 @@ state = AppState()
 # LLM Processing Functions
 # ============================================================================
 
-def init_llm(server_url: str, model_name: str, vision_model_name: str, provider: str = 'lm_studio') -> Tuple[str, gr.Dropdown, gr.Dropdown]:
+
+def init_llm(
+    server_url: str,
+    model_name: str,
+    vision_model_name: str,
+    provider: str = "lm_studio",
+) -> Tuple[str, gr.Dropdown, gr.Dropdown]:
     """Initialize LLM connection and fetch available models"""
     try:
         if not MODULLE_AVAILABLE:
-            return "❌ ModuLLe not installed", gr.update(choices=[]), gr.update(choices=[])
+            return (
+                "❌ ModuLLe not installed",
+                gr.update(choices=[]),
+                gr.update(choices=[]),
+            )
 
         # Map provider names to ModuLLe provider strings
-        provider_map = {
-            'LM Studio': 'lm_studio',
-            'Ollama': 'ollama'
-        }
-        provider_key = provider_map.get(provider, 'lm_studio')
+        provider_map = {"LM Studio": "lm_studio", "Ollama": "ollama"}
+        provider_key = provider_map.get(provider, "lm_studio")
 
         # First, create a temporary client to list models
         temp_client, _, _ = create_ai_client(
             provider=provider_key,
             base_url=server_url,
-            text_model=model_name or 'placeholder',
-            vision_model=vision_model_name or None
+            text_model=model_name or "placeholder",
+            vision_model=vision_model_name or None,
         )
 
         # Try to get available models
@@ -119,15 +133,22 @@ def init_llm(server_url: str, model_name: str, vision_model_name: str, provider:
                 llm_server=server_url,
                 llm_model=model_name,
                 llm_vision_model=vision_model_name,
-                llm_provider=provider
+                llm_provider=provider,
             )
-            state.llm_client, state.text_processor, state.vision_processor = create_ai_client(
-                provider=provider_key,
-                base_url=server_url,
-                text_model=model_name,
-                vision_model=vision_model_name or model_name  # Use text model if no vision model specified
+            state.llm_client, state.text_processor, state.vision_processor = (
+                create_ai_client(
+                    provider=provider_key,
+                    base_url=server_url,
+                    text_model=model_name,
+                    vision_model=vision_model_name
+                    or model_name,  # Use text model if no vision model specified
+                )
             )
-            vision_info = f" (Vision: {vision_model_name or model_name})" if vision_model_name else ""
+            vision_info = (
+                f" (Vision: {vision_model_name or model_name})"
+                if vision_model_name
+                else ""
+            )
             status = f"✅ Connected to {provider}: {server_url}\nText Model: {model_name}{vision_info}"
         else:
             state.llm_client = temp_client
@@ -136,11 +157,20 @@ def init_llm(server_url: str, model_name: str, vision_model_name: str, provider:
         if available_models:
             status += f"\n\nFound {len(available_models)} model(s)"
 
-        models_dropdown = gr.update(choices=available_models, value=model_name if model_name else None)
-        vision_dropdown = gr.update(choices=available_models, value=vision_model_name if vision_model_name else None)
+        models_dropdown = gr.update(
+            choices=available_models, value=model_name if model_name else None
+        )
+        vision_dropdown = gr.update(
+            choices=available_models,
+            value=vision_model_name if vision_model_name else None,
+        )
         return status, models_dropdown, vision_dropdown
     except Exception as e:
-        return f"❌ LLM connection failed: {str(e)}", gr.update(choices=[]), gr.update(choices=[])
+        return (
+            f"❌ LLM connection failed: {str(e)}",
+            gr.update(choices=[]),
+            gr.update(choices=[]),
+        )
 
 
 def expand_prompt(user_prompt: str) -> str:
@@ -152,11 +182,10 @@ def expand_prompt(user_prompt: str) -> str:
         return "❌ Please enter a prompt to expand"
 
     try:
-        system_prompt = settings.load_system_prompt('expand')
+        system_prompt = settings.load_system_prompt("expand")
 
         result = state.text_processor.generate(
-            prompt=user_prompt,
-            system_prompt=system_prompt if system_prompt else None
+            prompt=user_prompt, system_prompt=system_prompt if system_prompt else None
         )
 
         if result:
@@ -176,20 +205,32 @@ def extract_prompt(image) -> str:
         return "❌ Please upload an image first"
 
     try:
-        # Convert image to base64
+        # Convert image to base64 with resize to avoid Ollama "request body too large" error
+        img = Image.fromarray(image)
+        # Resize if image is too large (Ollama default limit is ~4MB)
+        # Target max 1024px on longest side to keep base64 under limit
+        max_size = 1024
+        if max(img.size) > max_size:
+            ratio = max_size / max(img.size)
+            new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
+            img = img.resize(new_size, Image.Resampling.LANCZOS)
+
+        # Use JPEG with quality setting for smaller file size
         buffered = io.BytesIO()
-        Image.fromarray(image).save(buffered, format="PNG")
+        img.save(buffered, format="JPEG", quality=85)
         img_base64 = base64.b64encode(buffered.getvalue()).decode()
 
         # Load the user's detailed system prompt from extract.txt
         # This contains all the instructions for how to analyze and generate prompts
-        extraction_instructions = settings.load_system_prompt('extract')
+        extraction_instructions = settings.load_system_prompt("extract")
 
         # Use the full instructions as the prompt for vision analysis
         # Vision models work best with instructions integrated into the prompt
         result = state.vision_processor.analyze_image(
             image_data=img_base64,
-            prompt=extraction_instructions if extraction_instructions else "Analyze this image and write a detailed prompt that could generate a similar image."
+            prompt=extraction_instructions
+            if extraction_instructions
+            else "Analyze this image and write a detailed prompt that could generate a similar image.",
         )
 
         if result:
@@ -209,18 +250,30 @@ def copy_style(image) -> str:
         return "❌ Please upload an image first"
 
     try:
-        # Convert image to base64
+        # Convert image to base64 with resize to avoid Ollama "request body too large" error
+        img = Image.fromarray(image)
+        # Resize if image is too large (Ollama default limit is ~4MB)
+        # Target max 1024px on longest side to keep base64 under limit
+        max_size = 1024
+        if max(img.size) > max_size:
+            ratio = max_size / max(img.size)
+            new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
+            img = img.resize(new_size, Image.Resampling.LANCZOS)
+
+        # Use JPEG with quality setting for smaller file size
         buffered = io.BytesIO()
-        Image.fromarray(image).save(buffered, format="PNG")
+        img.save(buffered, format="JPEG", quality=85)
         img_base64 = base64.b64encode(buffered.getvalue()).decode()
 
         # Load the style copy prompt from stylecopy.txt
-        style_prompt = settings.load_system_prompt('stylecopy')
+        style_prompt = settings.load_system_prompt("stylecopy")
 
         # Use vision model to analyze style
         result = state.vision_processor.analyze_image(
             image_data=img_base64,
-            prompt=style_prompt if style_prompt else "Describe the visual style of this image in great detail as if trying to reproduce it just from the description."
+            prompt=style_prompt
+            if style_prompt
+            else "Describe the visual style of this image in great detail as if trying to reproduce it just from the description.",
         )
 
         if result:
@@ -242,11 +295,11 @@ def refine_prompt(current_prompt: str, refinement_instruction: str) -> str:
         return "❌ Please provide refinement instructions"
 
     try:
-        system_prompt = settings.load_system_prompt('refine')
+        system_prompt = settings.load_system_prompt("refine")
 
         result = state.text_processor.generate(
             prompt=f"Current prompt: {current_prompt}\n\nModification requested: {refinement_instruction}\n\nProvide the refined prompt:",
-            system_prompt=system_prompt if system_prompt else None
+            system_prompt=system_prompt if system_prompt else None,
         )
 
         if result:
@@ -261,11 +314,16 @@ def refine_prompt(current_prompt: str, refinement_instruction: str) -> str:
 # gRPC Functions
 # ============================================================================
 
+
 def init_grpc(server_url: str) -> Tuple[str, gr.Dropdown, gr.Dropdown]:
     """Initialize gRPC connection and fetch models/LoRAs"""
     try:
         if not GRPC_AVAILABLE:
-            return "❌ DTgRPCconnector not installed", gr.update(choices=[]), gr.update(choices=[])
+            return (
+                "❌ DTgRPCconnector not installed",
+                gr.update(choices=[]),
+                gr.update(choices=[]),
+            )
 
         # Update settings
         settings.update_config(grpc_server=server_url)
@@ -280,37 +338,48 @@ def init_grpc(server_url: str) -> Tuple[str, gr.Dropdown, gr.Dropdown]:
                 server_address=server_url,
                 insecure=False,
                 verify_ssl=False,
-                ssl_cert_path=str(root_ca_path)
+                ssl_cert_path=str(root_ca_path),
             )
         else:
             # Fallback to insecure connection
             print(f"Warning: Root CA certificate not found at {root_ca_path}")
             print("Attempting insecure connection...")
-            state.grpc_client = DrawThingsClient(server_address=server_url, insecure=True)
+            state.grpc_client = DrawThingsClient(
+                server_address=server_url, insecure=True
+            )
 
         # Use Echo request to get structured metadata
-        echo_request = imageService_pb2.EchoRequest(name='list_files')
+        echo_request = imageService_pb2.EchoRequest(name="list_files")
         response = state.grpc_client.stub.Echo(echo_request)
 
         models = []
         loras = []
 
         # Use server's structured metadata (properly categorized)
-        if response.HasField('override'):
+        if response.HasField("override"):
             import json
+
             try:
-                models_data = json.loads(response.override.models) if response.override.models else []
-                loras_data = json.loads(response.override.loras) if response.override.loras else []
+                models_data = (
+                    json.loads(response.override.models)
+                    if response.override.models
+                    else []
+                )
+                loras_data = (
+                    json.loads(response.override.loras)
+                    if response.override.loras
+                    else []
+                )
 
                 # Extract both display names and filenames, create mappings
                 # Models: use 'name' field for display, 'file' for actual loading
                 model_display_names = []
                 state.model_name_to_file = {}
                 for m in models_data:
-                    if m.get('file'):
+                    if m.get("file"):
                         # Use 'name' field if available, otherwise use filename
-                        display_name = m.get('name', m['file'])
-                        file_name = m['file']
+                        display_name = m.get("name", m["file"])
+                        file_name = m["file"]
                         model_display_names.append(display_name)
                         state.model_name_to_file[display_name] = file_name
 
@@ -318,9 +387,9 @@ def init_grpc(server_url: str) -> Tuple[str, gr.Dropdown, gr.Dropdown]:
                 lora_display_names = []
                 state.lora_name_to_file = {}
                 for l in loras_data:
-                    if l.get('file'):
-                        display_name = l.get('name', l['file'])
-                        file_name = l['file']
+                    if l.get("file"):
+                        display_name = l.get("name", l["file"])
+                        file_name = l["file"]
                         lora_display_names.append(display_name)
                         state.lora_name_to_file[display_name] = file_name
 
@@ -334,7 +403,9 @@ def init_grpc(server_url: str) -> Tuple[str, gr.Dropdown, gr.Dropdown]:
                 state.grpc_metadata._models_cache = models_data
                 state.grpc_metadata._loras_cache = loras_data
             except json.JSONDecodeError:
-                print("Warning: Failed to parse model metadata, falling back to file list")
+                print(
+                    "Warning: Failed to parse model metadata, falling back to file list"
+                )
                 models = []
                 loras = []
                 state.model_name_to_file = {}
@@ -345,7 +416,9 @@ def init_grpc(server_url: str) -> Tuple[str, gr.Dropdown, gr.Dropdown]:
         if not models and response.files:
             for filename in response.files:
                 lower = filename.lower()
-                if ('.ckpt' in lower or '.safetensors' in lower) and 'lora' not in lower:
+                if (
+                    ".ckpt" in lower or ".safetensors" in lower
+                ) and "lora" not in lower:
                     models.append(filename)
                     # No name mapping for fallback mode
                     state.model_name_to_file[filename] = filename
@@ -362,11 +435,20 @@ def init_grpc(server_url: str) -> Tuple[str, gr.Dropdown, gr.Dropdown]:
         lora_choices = ["None"] + loras
 
         # Return updated dropdowns - they'll be used to update both settings and generation sections
-        return status, gr.update(choices=models, value=models[0] if models else None), gr.update(choices=lora_choices, value="None")
+        return (
+            status,
+            gr.update(choices=models, value=models[0] if models else None),
+            gr.update(choices=lora_choices, value="None"),
+        )
     except Exception as e:
         import traceback
+
         error_details = traceback.format_exc()
-        return f"❌ gRPC connection failed: {str(e)}\n\nDetails:\n{error_details}", gr.update(choices=[]), gr.update(choices=[])
+        return (
+            f"❌ gRPC connection failed: {str(e)}\n\nDetails:\n{error_details}",
+            gr.update(choices=[]),
+            gr.update(choices=[]),
+        )
 
 
 def on_model_selected(model_name: str) -> Tuple[gr.Dropdown, str, gr.Dropdown]:
@@ -383,16 +465,24 @@ def on_model_selected(model_name: str) -> Tuple[gr.Dropdown, str, gr.Dropdown]:
     # Get model metadata to determine base resolution (use actual filename)
     try:
         model_info = state.grpc_metadata.get_latent_info(model_file)
-        latent_size = model_info.get('latent_size', 128)
-        version = model_info.get('version', 'sdxl')
+        latent_size = model_info.get("latent_size", 128)
+        version = model_info.get("version", "sdxl")
 
         # Determine base resolution from version (not latent_size!)
         # FLUX/Z-Image/Qwen/SD3 use 64-latent but 1024px output
         # SDXL uses 128-latent with 1024px output
         # SD 1.5/2.x use 64-latent with 512px output
-        if version in ['flux1', 'z_image', 'qwen_image', 'sd3', 'sd3_large', 'sdxl', 'sdxl_base_v0.9']:
+        if version in [
+            "flux1",
+            "z_image",
+            "qwen_image",
+            "sd3",
+            "sd3_large",
+            "sdxl",
+            "sdxl_base_v0.9",
+        ]:
             base_resolution = 1024
-        elif version in ['v1', 'v2']:
+        elif version in ["v1", "v2"]:
             base_resolution = 512
         else:
             # Fallback based on latent size
@@ -417,7 +507,10 @@ def on_model_selected(model_name: str) -> Tuple[gr.Dropdown, str, gr.Dropdown]:
     return (
         gr.update(choices=preset_choices, value="Custom (no preset)"),
         info,
-        gr.update(choices=aspect_choices, value=aspect_choices[4] if len(aspect_choices) > 4 else aspect_choices[0])
+        gr.update(
+            choices=aspect_choices,
+            value=aspect_choices[4] if len(aspect_choices) > 4 else aspect_choices[0],
+        ),
     )
 
 
@@ -448,58 +541,109 @@ SAMPLER_NAMES = list(SAMPLERS.keys())
 SAMPLER_DEFAULT = "DPM++ 2M Karras"  # Index 0, universally supported
 
 
-def on_preset_selected(preset_name: str) -> Tuple[int, float, str, str, float, bool, int, bool, bool, int, int, float, int, bool, any]:
+def on_preset_selected(
+    preset_name: str,
+) -> Tuple[
+    int, float, str, str, float, bool, int, bool, bool, int, int, float, int, bool, any
+]:
     """When a preset is selected, apply its settings"""
     if preset_name == "Custom (no preset)" or not preset_name:
-        return (gr.update(), gr.update(), "Using custom settings",
-                gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(),
-                gr.update(), gr.update(), gr.update(), gr.update(), gr.update())
+        return (
+            gr.update(),
+            gr.update(),
+            "Using custom settings",
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
+        )
 
     preset = settings.get_model_preset(preset_name)
     if preset:
-        steps = preset.get('steps', preset.get('recommended_steps', 16))
-        cfg = preset.get('guidanceScale', preset.get('recommended_cfg', 7.0))
+        steps = preset.get("steps", preset.get("recommended_steps", 16))
+        cfg = preset.get("guidanceScale", preset.get("recommended_cfg", 7.0))
 
         # Get sampler (handle both ID and name formats)
-        sampler = preset.get('sampler', 0)
+        sampler = preset.get("sampler", 0)
         if isinstance(sampler, str):
             # Preset uses sampler name directly
             sampler_name = sampler if sampler in SAMPLERS else SAMPLER_DEFAULT
         else:
             # Preset uses sampler ID - look up the name
-            sampler_name = next((name for name, id in SAMPLERS.items() if id == sampler), SAMPLER_DEFAULT)
+            sampler_name = next(
+                (name for name, id in SAMPLERS.items() if id == sampler),
+                SAMPLER_DEFAULT,
+            )
 
         # Advanced settings (shift is Float32 with default 1.0)
-        shift = float(preset.get('shift', 1.0))
-        res_shift = preset.get('resolutionDependentShift', False)
-        seed_mode = preset.get('seedMode', 2)
-        cfg_zero = preset.get('cfgZeroStar', False)
-        hires_fix = preset.get('hiresFix', False)
+        shift = float(preset.get("shift", 1.0))
+        res_shift = preset.get("resolutionDependentShift", False)
+        seed_mode = preset.get("seedMode", 2)
+        cfg_zero = preset.get("cfgZeroStar", False)
+        hires_fix = preset.get("hiresFix", False)
         # Convert scale units to pixels for UI (scale_units * 64 = pixels)
-        hires_fix_start_width = preset.get('hiresFixStartWidth', 0) * 64
-        hires_fix_start_height = preset.get('hiresFixStartHeight', 0) * 64
-        hires_fix_strength = preset.get('hiresFixStrength', 0.7)
-        clip_skip = preset.get('clip_skip', 1)  # Pony needs 2, most others need 1
-        tea_cache = preset.get('teaCache', False)
+        hires_fix_start_width = preset.get("hiresFixStartWidth", 0) * 64
+        hires_fix_start_height = preset.get("hiresFixStartHeight", 0) * 64
+        hires_fix_strength = preset.get("hiresFixStrength", 0.7)
+        clip_skip = preset.get("clip_skip", 1)  # Pony needs 2, most others need 1
+        tea_cache = preset.get("teaCache", False)
 
         # Update aspect ratios based on preset's base_resolution
-        base_resolution = preset.get('base_resolution', 1024)
+        base_resolution = preset.get("base_resolution", 1024)
         state.current_model_base_resolution = base_resolution
         aspect_ratios = settings.load_aspect_ratios(base_resolution)
         aspect_choices = [label for label, _, _ in aspect_ratios]
         # Default to square aspect ratio (usually 4th or 5th in list)
-        default_aspect = aspect_choices[4] if len(aspect_choices) > 4 else aspect_choices[0]
+        default_aspect = (
+            aspect_choices[4] if len(aspect_choices) > 4 else aspect_choices[0]
+        )
 
-        notes = preset.get('notes', '')
+        notes = preset.get("notes", "")
         info = f"✅ Preset applied: {preset.get('name', 'Unknown')}\nBase resolution: {base_resolution}px\n{notes}"
 
-        return (steps, cfg, info, sampler_name, shift, res_shift, seed_mode, cfg_zero,
-                hires_fix, hires_fix_start_width, hires_fix_start_height, hires_fix_strength, clip_skip, tea_cache,
-                gr.update(choices=aspect_choices, value=default_aspect))
+        return (
+            steps,
+            cfg,
+            info,
+            sampler_name,
+            shift,
+            res_shift,
+            seed_mode,
+            cfg_zero,
+            hires_fix,
+            hires_fix_start_width,
+            hires_fix_start_height,
+            hires_fix_strength,
+            clip_skip,
+            tea_cache,
+            gr.update(choices=aspect_choices, value=default_aspect),
+        )
     else:
-        return (gr.update(), gr.update(), f"⚠️ Preset not found: {preset_name}",
-                gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(),
-                gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update())
+        return (
+            gr.update(),
+            gr.update(),
+            f"⚠️ Preset not found: {preset_name}",
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
+        )
 
 
 def on_negative_prompt_preset_selected(preset_name: str) -> str:
@@ -510,7 +654,7 @@ def on_negative_prompt_preset_selected(preset_name: str) -> str:
     negative_prompt_presets = settings.load_negative_prompts()
     if preset_name in negative_prompt_presets:
         preset = negative_prompt_presets[preset_name]
-        return preset.get('negative_prompt', '')
+        return preset.get("negative_prompt", "")
     else:
         return gr.update()
 
@@ -524,10 +668,11 @@ def decode_preview(data: bytes) -> Optional[Image.Image]:
     Returns a PIL Image or None on failure.
     """
     import struct as _struct
+
     try:
         if len(data) < 68:
             return None
-        hdr = _struct.unpack_from('<9I', data, 0)
+        hdr = _struct.unpack_from("<9I", data, 0)
         channels = hdr[8]
         height = hdr[6]
         width = hdr[7]
@@ -540,8 +685,9 @@ def decode_preview(data: bytes) -> Optional[Image.Image]:
         # Decompress the tensor and visualize first 3 channels
         import numpy as np
         import fpzip
+
         compressed_data = data[68:]
-        float_data = fpzip.decompress(compressed_data, order='C')
+        float_data = fpzip.decompress(compressed_data, order="C")
         if float_data.ndim == 4:
             float_data = float_data[0]  # Remove batch dim
 
@@ -558,12 +704,14 @@ def decode_preview(data: bytes) -> Optional[Image.Image]:
                 rgb[:, :, c] = 0.5
 
         img_array = (rgb * 255).clip(0, 255).astype(np.uint8)
-        preview = Image.fromarray(img_array, 'RGB')
+        preview = Image.fromarray(img_array, "RGB")
 
         # Upscale small latent previews so they're visible in the UI
         if width < 256 or height < 256:
             scale = max(1, 512 // max(width, height))
-            preview = preview.resize((width * scale, height * scale), Image.Resampling.NEAREST)
+            preview = preview.resize(
+                (width * scale, height * scale), Image.Resampling.NEAREST
+            )
 
         return preview
     except Exception as e:
@@ -571,13 +719,34 @@ def decode_preview(data: bytes) -> Optional[Image.Image]:
         return None
 
 
-def generate_image(prompt: str, model: str, lora1: str, lora1_weight: float, lora2: str, lora2_weight: float,
-                  steps: int, cfg_scale: float, sampler_name: str, aspect_ratio: str, resolution_scale: str,
-                  seed: int, negative_prompt: str,
-                  shift: float, res_dependent_shift: bool, seed_mode: int,
-                  cfg_zero_star: bool, hires_fix: bool, hires_fix_start_width: int, hires_fix_start_height: int,
-                  hires_fix_strength: float, clip_skip: int, tea_cache: bool, tcd_gamma: float,
-                  live_preview: bool = False, progress=gr.Progress()):
+def generate_image(
+    prompt: str,
+    model: str,
+    lora1: str,
+    lora1_weight: float,
+    lora2: str,
+    lora2_weight: float,
+    steps: int,
+    cfg_scale: float,
+    sampler_name: str,
+    aspect_ratio: str,
+    resolution_scale: str,
+    seed: int,
+    negative_prompt: str,
+    shift: float,
+    res_dependent_shift: bool,
+    seed_mode: int,
+    cfg_zero_star: bool,
+    hires_fix: bool,
+    hires_fix_start_width: int,
+    hires_fix_start_height: int,
+    hires_fix_strength: float,
+    clip_skip: int,
+    tea_cache: bool,
+    tcd_gamma: float,
+    live_preview: bool = False,
+    progress=gr.Progress(),
+):
     """Generate image using Draw Things gRPC with progress tracking (generator for live preview)"""
     if not state.grpc_client:
         yield None, "❌ gRPC not initialized. Configure in Settings tab first."
@@ -593,8 +762,16 @@ def generate_image(prompt: str, model: str, lora1: str, lora1_weight: float, lor
 
     # Translate display names to actual filenames for gRPC
     model_file = state.model_name_to_file.get(model, model)
-    lora1_file = state.lora_name_to_file.get(lora1, lora1) if lora1 and lora1.strip() and lora1 != "None" else None
-    lora2_file = state.lora_name_to_file.get(lora2, lora2) if lora2 and lora2.strip() and lora2 != "None" else None
+    lora1_file = (
+        state.lora_name_to_file.get(lora1, lora1)
+        if lora1 and lora1.strip() and lora1 != "None"
+        else None
+    )
+    lora2_file = (
+        state.lora_name_to_file.get(lora2, lora2)
+        if lora2 and lora2.strip() and lora2 != "None"
+        else None
+    )
 
     # Start timing
     start_time = time.time()
@@ -603,8 +780,10 @@ def generate_image(prompt: str, model: str, lora1: str, lora1_weight: float, lor
         # Get model metadata FIRST to determine latent size and base resolution (use filename)
         try:
             model_info = state.grpc_metadata.get_latent_info(model_file)
-            latent_size = model_info.get('latent_size') or 128  # Handle None/null values
-            version = model_info.get('version') or 'sdxl'
+            latent_size = (
+                model_info.get("latent_size") or 128
+            )  # Handle None/null values
+            version = model_info.get("version") or "sdxl"
 
             print(f"\n🔍 Model Metadata for {model} → {model_file}:")
             print(f"   Version: {version}")
@@ -614,7 +793,7 @@ def generate_image(prompt: str, model: str, lora1: str, lora1_weight: float, lor
             # Fallback: assume SDXL
             print(f"\n⚠️  Failed to get model metadata: {e}")
             latent_size = 128
-            version = 'sdxl'
+            version = "sdxl"
 
         # Use the base resolution that was set by model/preset selection
         # This ensures aspect ratios match what's in the dropdown
@@ -632,7 +811,7 @@ def generate_image(prompt: str, model: str, lora1: str, lora1_weight: float, lor
                 break
 
         # Apply resolution scale multiplier
-        scale_multiplier = float(resolution_scale.replace('x', ''))
+        scale_multiplier = float(resolution_scale.replace("x", ""))
         width = int(width * scale_multiplier)
         height = int(height * scale_multiplier)
 
@@ -654,6 +833,7 @@ def generate_image(prompt: str, model: str, lora1: str, lora1_weight: float, lor
 
             # Official exponential formula: maps resolution to shift range 0.5-1.15
             import math
+
             calculated_shift = math.exp(
                 ((resolution_factor - 256) * (1.15 - 0.5) / (4096 - 256)) + 0.5
             )
@@ -682,17 +862,32 @@ def generate_image(prompt: str, model: str, lora1: str, lora1_weight: float, lor
                 print(f"\n⚠️  High-Res Fix: DISABLED - Start resolution must be > 0")
                 print(f"   Hint: Set start resolution to at least 64×64 pixels")
                 hires_fix = False
-            elif hires_fix_start_width_scale >= target_width_scale or hires_fix_start_height_scale >= target_height_scale:
-                print(f"\n⚠️  High-Res Fix: DISABLED - Start resolution must be SMALLER than target")
-                print(f"   Start: {hires_fix_start_width}×{hires_fix_start_height}px ({hires_fix_start_width_scale}×{hires_fix_start_height_scale} scale)")
-                print(f"   Target: {width}×{height}px ({target_width_scale}×{target_height_scale} scale)")
-                print(f"   Hint: Either increase target resolution OR decrease start resolution")
+            elif (
+                hires_fix_start_width_scale >= target_width_scale
+                or hires_fix_start_height_scale >= target_height_scale
+            ):
+                print(
+                    f"\n⚠️  High-Res Fix: DISABLED - Start resolution must be SMALLER than target"
+                )
+                print(
+                    f"   Start: {hires_fix_start_width}×{hires_fix_start_height}px ({hires_fix_start_width_scale}×{hires_fix_start_height_scale} scale)"
+                )
+                print(
+                    f"   Target: {width}×{height}px ({target_width_scale}×{target_height_scale} scale)"
+                )
+                print(
+                    f"   Hint: Either increase target resolution OR decrease start resolution"
+                )
                 hires_fix = False
             else:
                 hires_fix_valid = True
                 print(f"\n🔧 High-Res Fix Enabled:")
-                print(f"   Start Resolution: {hires_fix_start_width}×{hires_fix_start_height}px ({hires_fix_start_width_scale}×{hires_fix_start_height_scale} scale)")
-                print(f"   Target Resolution: {width}×{height}px ({target_width_scale}×{target_height_scale} scale)")
+                print(
+                    f"   Start Resolution: {hires_fix_start_width}×{hires_fix_start_height}px ({hires_fix_start_width_scale}×{hires_fix_start_height_scale} scale)"
+                )
+                print(
+                    f"   Target Resolution: {width}×{height}px ({target_width_scale}×{target_height_scale} scale)"
+                )
                 print(f"   Refinement Strength: {hires_fix_strength}")
                 upscale_factor = width / hires_fix_start_width
                 print(f"   Upscale Factor: {upscale_factor:.2f}x")
@@ -705,14 +900,18 @@ def generate_image(prompt: str, model: str, lora1: str, lora1_weight: float, lor
         # Because server does: 16 * 64 = 1024
         if latent_size == 128:
             # SDXL: double the scale to compensate for server using 64x multiplier
-            scale_width = width // 64   # Use 64 instead of 128
+            scale_width = width // 64  # Use 64 instead of 128
             scale_height = height // 64
-            print(f"   → Scale Factors: {scale_width}x{scale_height} (SDXL workaround: {width}÷64 = {scale_width})")
+            print(
+                f"   → Scale Factors: {scale_width}x{scale_height} (SDXL workaround: {width}÷64 = {scale_width})"
+            )
         else:
             # SD 1.5, FLUX, etc: normal calculation
             scale_width = width // latent_size
             scale_height = height // latent_size
-            print(f"   → Scale Factors: {scale_width}x{scale_height} ({width}÷{latent_size} = {scale_width})")
+            print(
+                f"   → Scale Factors: {scale_width}x{scale_height} ({width}÷{latent_size} = {scale_width})"
+            )
 
         # Handle seed: -1 or None means random
         if seed is None or seed == -1:
@@ -720,7 +919,7 @@ def generate_image(prompt: str, model: str, lora1: str, lora1_weight: float, lor
         else:
             actual_seed = seed
 
-        seed_display = 'random' if (seed is None or seed == -1) else str(seed)
+        seed_display = "random" if (seed is None or seed == -1) else str(seed)
 
         status = f"🎨 Generating image...\n\nPrompt: {prompt[:80]}...\nModel: {model}\nSize: {width}x{height}\nSteps: {steps}, CFG: {cfg_scale}\nSeed: {seed_display}\n"
 
@@ -755,15 +954,21 @@ def generate_image(prompt: str, model: str, lora1: str, lora1_weight: float, lor
 
         # Build loras vector (supports 0, 1, or 2 LoRAs)
         GenerationConfiguration.StartLorasVector(builder, len(lora_offsets))
-        for lora_offset in reversed(lora_offsets):  # Reverse for FlatBuffer prepend order
+        for lora_offset in reversed(
+            lora_offsets
+        ):  # Reverse for FlatBuffer prepend order
             builder.PrependUOffsetTRelative(lora_offset)
         loras_vector = builder.EndVector()
 
         # Build main configuration
         GenerationConfiguration.Start(builder)
         GenerationConfiguration.AddId(builder, 0)
-        GenerationConfiguration.AddStartWidth(builder, scale_width)   # SCALE FACTOR not pixels!
-        GenerationConfiguration.AddStartHeight(builder, scale_height) # SCALE FACTOR not pixels!
+        GenerationConfiguration.AddStartWidth(
+            builder, scale_width
+        )  # SCALE FACTOR not pixels!
+        GenerationConfiguration.AddStartHeight(
+            builder, scale_height
+        )  # SCALE FACTOR not pixels!
 
         # SDXL conditioning (required for SDXL models with latent_size=128)
         # These tell SDXL what resolution it should target
@@ -772,7 +977,9 @@ def generate_image(prompt: str, model: str, lora1: str, lora1_weight: float, lor
             GenerationConfiguration.AddOriginalImageHeight(builder, height)
             GenerationConfiguration.AddTargetImageWidth(builder, width)
             GenerationConfiguration.AddTargetImageHeight(builder, height)
-            print(f"   → SDXL conditioning: Original={width}x{height}, Target={width}x{height}")
+            print(
+                f"   → SDXL conditioning: Original={width}x{height}, Target={width}x{height}"
+            )
 
         GenerationConfiguration.AddSeed(builder, actual_seed)
         GenerationConfiguration.AddSteps(builder, steps)
@@ -789,8 +996,12 @@ def generate_image(prompt: str, model: str, lora1: str, lora1_weight: float, lor
 
         # Always add these core fields (required by server)
         GenerationConfiguration.AddSeedMode(builder, seed_mode)
-        GenerationConfiguration.AddClipSkip(builder, clip_skip)  # From preset (Pony needs 2!)
-        GenerationConfiguration.AddShift(builder, final_shift)  # Uses calculated shift if res_dependent_shift enabled
+        GenerationConfiguration.AddClipSkip(
+            builder, clip_skip
+        )  # From preset (Pony needs 2!)
+        GenerationConfiguration.AddShift(
+            builder, final_shift
+        )  # Uses calculated shift if res_dependent_shift enabled
         GenerationConfiguration.AddControls(builder, controls_vector)
         GenerationConfiguration.AddLoras(builder, loras_vector)
 
@@ -798,9 +1009,13 @@ def generate_image(prompt: str, model: str, lora1: str, lora1_weight: float, lor
         # HiresFix parameters (when enabled) - use scale units for FlatBuffer
         GenerationConfiguration.AddHiresFix(builder, hires_fix)
         if hires_fix and hires_fix_start_width_scale > 0:
-            GenerationConfiguration.AddHiresFixStartWidth(builder, hires_fix_start_width_scale)
+            GenerationConfiguration.AddHiresFixStartWidth(
+                builder, hires_fix_start_width_scale
+            )
         if hires_fix and hires_fix_start_height_scale > 0:
-            GenerationConfiguration.AddHiresFixStartHeight(builder, hires_fix_start_height_scale)
+            GenerationConfiguration.AddHiresFixStartHeight(
+                builder, hires_fix_start_height_scale
+            )
         if hires_fix:
             GenerationConfiguration.AddHiresFixStrength(builder, hires_fix_strength)
 
@@ -817,12 +1032,12 @@ def generate_image(prompt: str, model: str, lora1: str, lora1_weight: float, lor
         # Create gRPC request
         request = imageService_pb2.ImageGenerationRequest(
             prompt=prompt,
-            negativePrompt=negative_prompt if negative_prompt else '',
+            negativePrompt=negative_prompt if negative_prompt else "",
             configuration=config_bytes,
             scaleFactor=1,
-            user='MuddleMeThis',
+            user="MuddleMeThis",
             device=imageService_pb2.LAPTOP,
-            chunked=False
+            chunked=False,
         )
 
         status += "\n📡 Sending request to server...\n"
@@ -836,22 +1051,28 @@ def generate_image(prompt: str, model: str, lora1: str, lora1_weight: float, lor
 
         for response in state.grpc_client.stub.GenerateImage(request):
             # Handle progress updates
-            if response.HasField('currentSignpost'):
+            if response.HasField("currentSignpost"):
                 signpost = response.currentSignpost
-                if signpost.HasField('sampling'):
+                if signpost.HasField("sampling"):
                     current_step = signpost.sampling.step
                     progress_pct = current_step / steps
-                    progress(progress_pct, desc=f"Sampling: step {current_step}/{steps}")
-                elif signpost.HasField('textEncoded'):
+                    progress(
+                        progress_pct, desc=f"Sampling: step {current_step}/{steps}"
+                    )
+                elif signpost.HasField("textEncoded"):
                     progress(0.05, desc="Text encoded")
-                elif signpost.HasField('imageEncoded'):
+                elif signpost.HasField("imageEncoded"):
                     progress(0.95, desc="Image encoded")
-                elif signpost.HasField('imageDecoded'):
+                elif signpost.HasField("imageDecoded"):
                     progress(0.98, desc="Image decoded")
 
             # Handle preview images (live preview during sampling)
             # Yield image only, gr.update() leaves status/progress untouched
-            if live_preview and response.HasField('previewImage') and response.previewImage:
+            if (
+                live_preview
+                and response.HasField("previewImage")
+                and response.previewImage
+            ):
                 preview_pil = decode_preview(response.previewImage)
                 if preview_pil is not None:
                     yield preview_pil, gr.update()
@@ -870,7 +1091,9 @@ def generate_image(prompt: str, model: str, lora1: str, lora1_weight: float, lor
             # Add metadata to image
             metadata = PngInfo()
             metadata.add_text("prompt", prompt)
-            metadata.add_text("negative_prompt", negative_prompt if negative_prompt else "")
+            metadata.add_text(
+                "negative_prompt", negative_prompt if negative_prompt else ""
+            )
             metadata.add_text("model", model)
             metadata.add_text("model_file", model_file)
             if lora1 and lora1 != "None":
@@ -916,15 +1139,35 @@ def generate_image(prompt: str, model: str, lora1: str, lora1_weight: float, lor
 
     except Exception as e:
         import traceback
+
         error_details = traceback.format_exc()
-        yield None, f"❌ Error during generation:\n{str(e)}\n\nDetails:\n{error_details}"
+        yield (
+            None,
+            f"❌ Error during generation:\n{str(e)}\n\nDetails:\n{error_details}",
+        )
 
 
-def edit_image(input_image, instruction: str, model: str, steps: int, cfg_scale: float,
-               sampler_name: str, strength: float, lora1: str, lora1_weight: float,
-               lora2: str, lora2_weight: float, negative_prompt: str, seed: int,
-               clip_skip: int, shift: float, res_dependent_shift: bool, tcd_gamma: float,
-               live_preview: bool = False, progress=gr.Progress()) -> Tuple[any, str]:
+def edit_image(
+    input_image,
+    instruction: str,
+    model: str,
+    steps: int,
+    cfg_scale: float,
+    sampler_name: str,
+    strength: float,
+    lora1: str,
+    lora1_weight: float,
+    lora2: str,
+    lora2_weight: float,
+    negative_prompt: str,
+    seed: int,
+    clip_skip: int,
+    shift: float,
+    res_dependent_shift: bool,
+    tcd_gamma: float,
+    live_preview: bool = False,
+    progress=gr.Progress(),
+) -> Tuple[any, str]:
     """Edit an image using AI instructions (generator for live preview)"""
     if not state.grpc_client:
         yield None, "❌ gRPC not initialized. Configure in Settings tab first."
@@ -948,7 +1191,7 @@ def edit_image(input_image, instruction: str, model: str, steps: int, cfg_scale:
 
     try:
         # Convert numpy array to PIL Image
-        pil_img = Image.fromarray(input_image.astype('uint8'), 'RGB')
+        pil_img = Image.fromarray(input_image.astype("uint8"), "RGB")
         original_size = pil_img.size
 
         # Translate display name to actual filename
@@ -970,7 +1213,9 @@ def edit_image(input_image, instruction: str, model: str, steps: int, cfg_scale:
             new_w = int(pil_img.width * scale_down)
             new_h = int(pil_img.height * scale_down)
             pil_img = pil_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-            status += f"📐 Downscaled to: {new_w}×{new_h} pixels (max {MAX_EDIT_PIXELS}px)\n"
+            status += (
+                f"📐 Downscaled to: {new_w}×{new_h} pixels (max {MAX_EDIT_PIXELS}px)\n"
+            )
 
         # Round to nearest 64 pixels to match model requirements
         target_width = ((pil_img.width + 32) // 64) * 64
@@ -978,7 +1223,9 @@ def edit_image(input_image, instruction: str, model: str, steps: int, cfg_scale:
 
         if pil_img.size != (target_width, target_height):
             status += f"📐 Aligned to: {target_width}×{target_height} pixels (64-pixel aligned)\n\n"
-            pil_img = pil_img.resize((target_width, target_height), Image.Resampling.LANCZOS)
+            pil_img = pil_img.resize(
+                (target_width, target_height), Image.Resampling.LANCZOS
+            )
         else:
             status += f"📐 Image already 64-pixel aligned\n\n"
 
@@ -990,7 +1237,9 @@ def edit_image(input_image, instruction: str, model: str, steps: int, cfg_scale:
         # Calculate resolution-dependent shift if enabled (FLUX models)
         if res_dependent_shift:
             resolution_factor = (target_width * target_height) / 256
-            final_shift = math.exp(((resolution_factor - 256) * (1.15 - 0.5) / (4096 - 256)) + 0.5)
+            final_shift = math.exp(
+                ((resolution_factor - 256) * (1.15 - 0.5) / (4096 - 256)) + 0.5
+            )
             status += f"📐 Resolution-dependent shift: {final_shift:.2f} (calculated from {target_width}×{target_height})\n"
         else:
             final_shift = shift
@@ -999,7 +1248,7 @@ def edit_image(input_image, instruction: str, model: str, steps: int, cfg_scale:
         loras = []
         for lora_name, lw in [(lora1, lora1_weight), (lora2, lora2_weight)]:
             if lora_name and lora_name != "None" and lora_name.strip():
-                if hasattr(state, 'lora_name_to_file') and state.lora_name_to_file:
+                if hasattr(state, "lora_name_to_file") and state.lora_name_to_file:
                     lora_file = state.lora_name_to_file.get(lora_name, lora_name)
                 else:
                     lora_file = lora_name
@@ -1036,7 +1285,9 @@ def edit_image(input_image, instruction: str, model: str, steps: int, cfg_scale:
         config_bytes = gen_config.to_flatbuffer()
 
         # Encode input image using client's encoder
-        image_tensor = state.grpc_client._encode_image(pil_img, target_width, target_height)
+        image_tensor = state.grpc_client._encode_image(
+            pil_img, target_width, target_height
+        )
         image_hash = hashlib.sha256(image_tensor).digest()
 
         status += "📡 Sending to server...\n"
@@ -1045,10 +1296,10 @@ def edit_image(input_image, instruction: str, model: str, steps: int, cfg_scale:
         # Build gRPC request with image (content-addressable via hash)
         request = imageService_pb2.ImageGenerationRequest(
             prompt=instruction,
-            negativePrompt=negative_prompt if negative_prompt else '',
+            negativePrompt=negative_prompt if negative_prompt else "",
             configuration=config_bytes,
             scaleFactor=1,
-            user='MuddleMeThis',
+            user="MuddleMeThis",
             device=imageService_pb2.LAPTOP,
             chunked=True,
             image=image_hash,
@@ -1063,23 +1314,30 @@ def edit_image(input_image, instruction: str, model: str, steps: int, cfg_scale:
 
         for response in state.grpc_client.stub.GenerateImage(request):
             # Handle progress signposts
-            if response.HasField('currentSignpost'):
+            if response.HasField("currentSignpost"):
                 signpost = response.currentSignpost
-                if signpost.HasField('sampling'):
+                if signpost.HasField("sampling"):
                     current_step = signpost.sampling.step
-                    progress(0.3 + (current_step / steps) * 0.6, desc=f"Editing: step {current_step}/{steps}")
-                elif signpost.HasField('textEncoded'):
+                    progress(
+                        0.3 + (current_step / steps) * 0.6,
+                        desc=f"Editing: step {current_step}/{steps}",
+                    )
+                elif signpost.HasField("textEncoded"):
                     progress(0.35, desc="Text encoded")
-                elif signpost.HasField('imageEncoded'):
+                elif signpost.HasField("imageEncoded"):
                     image_was_encoded = True
                     status += "✅ Server received input image\n"
                     progress(0.40, desc="Input image encoded")
-                elif signpost.HasField('imageDecoded'):
+                elif signpost.HasField("imageDecoded"):
                     progress(0.98, desc="Result decoded")
 
             # Handle preview images (live preview during sampling)
             # Yield image only, gr.update() leaves status/progress untouched
-            if live_preview and response.HasField('previewImage') and response.previewImage:
+            if (
+                live_preview
+                and response.HasField("previewImage")
+                and response.previewImage
+            ):
                 preview_pil = decode_preview(response.previewImage)
                 if preview_pil is not None:
                     yield preview_pil, gr.update()
@@ -1091,7 +1349,7 @@ def edit_image(input_image, instruction: str, model: str, steps: int, cfg_scale:
 
                 if response.chunkState == imageService_pb2.LAST_CHUNK:
                     if len(image_chunks) > 1:
-                        combined = b''.join(image_chunks)
+                        combined = b"".join(image_chunks)
                         generated_images.append(combined)
                     elif len(image_chunks) == 1:
                         generated_images.append(image_chunks[0])
@@ -1107,8 +1365,8 @@ def edit_image(input_image, instruction: str, model: str, steps: int, cfg_scale:
             outputs_dir = Path("outputs")
             outputs_dir.mkdir(exist_ok=True)
 
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            safe_instruction = instruction[:50].replace(' ', '_').replace('/', '_')
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            safe_instruction = instruction[:50].replace(" ", "_").replace("/", "_")
             filename = f"edit_{timestamp}_{safe_instruction}.png"
             filepath = outputs_dir / filename
 
@@ -1129,7 +1387,9 @@ def edit_image(input_image, instruction: str, model: str, steps: int, cfg_scale:
 
             if not image_was_encoded:
                 final_status += "\n⚠️ WARNING: Server didn't encode input image!\n"
-                final_status += "   This means it generated from scratch, not editing.\n"
+                final_status += (
+                    "   This means it generated from scratch, not editing.\n"
+                )
                 final_status += "   → Check model is an edit model (Qwen Edit, Flux Kontext, etc.)\n"
 
             progress(1.0, desc="Complete!")
@@ -1139,9 +1399,9 @@ def edit_image(input_image, instruction: str, model: str, steps: int, cfg_scale:
 
     except Exception as e:
         import traceback
+
         error_details = traceback.format_exc()
         yield None, f"❌ Error during editing:\n{str(e)}\n\nDetails:\n{error_details}"
-
 
 
 def check_for_updates() -> Tuple[str, str]:
@@ -1155,78 +1415,94 @@ def check_for_updates() -> Tuple[str, str]:
         # Check if .git directory exists
         git_dir = Path(__file__).parent / ".git"
         if not git_dir.exists():
-            return ("❌ Not installed via git clone.\n\n"
-                   "To enable auto-updates, please reinstall using:\n"
-                   "git clone https://github.com/AlexTheStampede/MuddleMeThis.git",
-                   f"Current Version: {APP_VERSION}")
+            return (
+                "❌ Not installed via git clone.\n\n"
+                "To enable auto-updates, please reinstall using:\n"
+                "git clone https://github.com/AlexTheStampede/MuddleMeThis.git",
+                f"Current Version: {APP_VERSION}",
+            )
 
         # Fetch latest changes from remote
         result = subprocess.run(
-            ['git', 'fetch', 'origin', 'main'],
+            ["git", "fetch", "origin", "main"],
             capture_output=True,
             text=True,
             timeout=10,
-            cwd=Path(__file__).parent
+            cwd=Path(__file__).parent,
         )
 
         if result.returncode != 0:
-            return (f"❌ Unable to check for updates.\n\n"
-                   f"Error: {result.stderr}\n\n"
-                   f"Please check your internet connection.",
-                   f"Current Version: {APP_VERSION}")
+            return (
+                f"❌ Unable to check for updates.\n\n"
+                f"Error: {result.stderr}\n\n"
+                f"Please check your internet connection.",
+                f"Current Version: {APP_VERSION}",
+            )
 
         # Get local commit hash
         local_result = subprocess.run(
-            ['git', 'rev-parse', 'HEAD'],
+            ["git", "rev-parse", "HEAD"],
             capture_output=True,
             text=True,
             timeout=5,
-            cwd=Path(__file__).parent
+            cwd=Path(__file__).parent,
         )
         local_commit = local_result.stdout.strip()
 
         # Get remote commit hash
         remote_result = subprocess.run(
-            ['git', 'rev-parse', 'origin/main'],
+            ["git", "rev-parse", "origin/main"],
             capture_output=True,
             text=True,
             timeout=5,
-            cwd=Path(__file__).parent
+            cwd=Path(__file__).parent,
         )
         remote_commit = remote_result.stdout.strip()
 
         # Compare commits
         if local_commit == remote_commit:
-            return ("✅ Already up to date!\n\n"
-                   "You have the latest version of MuddleMeThis.",
-                   f"Current Version: {APP_VERSION} | Status: Up to date")
+            return (
+                "✅ Already up to date!\n\n"
+                "You have the latest version of MuddleMeThis.",
+                f"Current Version: {APP_VERSION} | Status: Up to date",
+            )
 
         # Get commit log to show what's new
         log_result = subprocess.run(
-            ['git', 'log', '--oneline', 'HEAD..origin/main'],
+            ["git", "log", "--oneline", "HEAD..origin/main"],
             capture_output=True,
             text=True,
             timeout=5,
-            cwd=Path(__file__).parent
+            cwd=Path(__file__).parent,
         )
 
-        commit_count = len(log_result.stdout.strip().split('\n')) if log_result.stdout.strip() else 0
+        commit_count = (
+            len(log_result.stdout.strip().split("\n"))
+            if log_result.stdout.strip()
+            else 0
+        )
         commit_list = log_result.stdout.strip()
 
         status_msg = f"✅ Updates available!\n\n"
         status_msg += f"New commits ({commit_count}):\n{commit_list}\n\n"
         status_msg += "Click 'Update Now' to install updates."
 
-        return (status_msg,
-               f"Current Version: {APP_VERSION} | Updates: {commit_count} commits available")
+        return (
+            status_msg,
+            f"Current Version: {APP_VERSION} | Updates: {commit_count} commits available",
+        )
 
     except subprocess.TimeoutExpired:
-        return ("❌ Request timed out.\n\n"
-               "Please check your internet connection and try again.",
-               f"Current Version: {APP_VERSION}")
+        return (
+            "❌ Request timed out.\n\n"
+            "Please check your internet connection and try again.",
+            f"Current Version: {APP_VERSION}",
+        )
     except Exception as e:
-        return (f"❌ Error checking for updates:\n{str(e)}",
-               f"Current Version: {APP_VERSION}")
+        return (
+            f"❌ Error checking for updates:\n{str(e)}",
+            f"Current Version: {APP_VERSION}",
+        )
 
 
 def apply_update() -> str:
@@ -1240,59 +1516,70 @@ def apply_update() -> str:
         # Check if .git directory exists
         git_dir = Path(__file__).parent / ".git"
         if not git_dir.exists():
-            return ("❌ Not installed via git clone.\n\n"
-                   "To enable auto-updates, please reinstall using:\n"
-                   "git clone https://github.com/AlexTheStampede/MuddleMeThis.git")
+            return (
+                "❌ Not installed via git clone.\n\n"
+                "To enable auto-updates, please reinstall using:\n"
+                "git clone https://github.com/AlexTheStampede/MuddleMeThis.git"
+            )
 
         # Check for uncommitted changes (excluding settings/config.json which is gitignored)
         status_result = subprocess.run(
-            ['git', 'status', '--porcelain'],
+            ["git", "status", "--porcelain"],
             capture_output=True,
             text=True,
             timeout=5,
-            cwd=Path(__file__).parent
+            cwd=Path(__file__).parent,
         )
 
         # Filter out gitignored files (settings/config.json)
         uncommitted_changes = [
-            line for line in status_result.stdout.strip().split('\n')
-            if line and 'settings/config.json' not in line
+            line
+            for line in status_result.stdout.strip().split("\n")
+            if line and "settings/config.json" not in line
         ]
 
         if uncommitted_changes:
-            files_list = '\n'.join(uncommitted_changes)
-            return (f"❌ Update blocked: Local changes detected.\n\n"
-                   f"Modified files:\n{files_list}\n\n"
-                   f"Please backup your changes and resolve conflicts before updating.\n"
-                   f"Or run manually: git stash && git pull && git stash pop")
+            files_list = "\n".join(uncommitted_changes)
+            return (
+                f"❌ Update blocked: Local changes detected.\n\n"
+                f"Modified files:\n{files_list}\n\n"
+                f"Please backup your changes and resolve conflicts before updating.\n"
+                f"Or run manually: git stash && git pull && git stash pop"
+            )
 
         # Perform git pull
         pull_result = subprocess.run(
-            ['git', 'pull', 'origin', 'main'],
+            ["git", "pull", "origin", "main"],
             capture_output=True,
             text=True,
             timeout=30,
-            cwd=Path(__file__).parent
+            cwd=Path(__file__).parent,
         )
 
         if pull_result.returncode != 0:
-            return (f"❌ Update failed!\n\n"
-                   f"Error: {pull_result.stderr}\n\n"
-                   f"You may need to resolve conflicts manually.\n"
-                   f"Run: git pull origin main")
+            return (
+                f"❌ Update failed!\n\n"
+                f"Error: {pull_result.stderr}\n\n"
+                f"You may need to resolve conflicts manually.\n"
+                f"Run: git pull origin main"
+            )
 
         # Success!
-        return ("✅ Update complete!\n\n"
-               f"Output:\n{pull_result.stdout}\n\n"
-               f"⚠️ Please restart the application to use the new version:\n"
-               f"  - Close this window\n"
-               f"  - Run: ./launch.sh (or launch.bat on Windows)\n"
-               f"  - Or: python app.py")
+        return (
+            "✅ Update complete!\n\n"
+            f"Output:\n{pull_result.stdout}\n\n"
+            f"⚠️ Please restart the application to use the new version:\n"
+            f"  - Close this window\n"
+            f"  - Run: ./launch.sh (or launch.bat on Windows)\n"
+            f"  - Or: python app.py"
+        )
 
     except subprocess.TimeoutExpired:
-        return ("❌ Update timed out.\n\n"
-               "The update process took too long. Please try again or update manually:\n"
-               "git pull origin main")
+        return (
+            "❌ Update timed out.\n\n"
+            "The update process took too long. Please try again or update manually:\n"
+            "git pull origin main"
+        )
     except Exception as e:
         return f"❌ Error during update:\n{str(e)}\n\nTry updating manually: git pull origin main"
 
@@ -1300,6 +1587,7 @@ def apply_update() -> str:
 # ============================================================================
 # Gradio Interface with PWA Support
 # ============================================================================
+
 
 def create_ui():
     """Create the Gradio interface with PWA support and custom styling"""
@@ -1338,24 +1626,26 @@ def create_ui():
                         expand_input = gr.Textbox(
                             label="Brief Prompt",
                             placeholder="Enter a short prompt (e.g., 'a peaceful garden')",
-                            lines=5
+                            lines=5,
                         )
-                        expand_btn = gr.Button("🚀 Expand Prompt", variant="primary", size="lg")
+                        expand_btn = gr.Button(
+                            "🚀 Expand Prompt", variant="primary", size="lg"
+                        )
 
                     with gr.Column(scale=3):
                         expand_output = gr.Textbox(
-                            label="Expanded Prompt",
-                            lines=12,
-                            interactive=True
+                            label="Expanded Prompt", lines=12, interactive=True
                         )
                         with gr.Row():
-                            expand_send_to_refine = gr.Button("➡️ Send to Refine", size="sm")
-                            expand_send_to_edit = gr.Button("🎨 Send to Edit", size="sm")
+                            expand_send_to_refine = gr.Button(
+                                "➡️ Send to Refine", size="sm"
+                            )
+                            expand_send_to_edit = gr.Button(
+                                "🎨 Send to Edit", size="sm"
+                            )
 
                 expand_btn.click(
-                    fn=expand_prompt,
-                    inputs=[expand_input],
-                    outputs=expand_output
+                    fn=expand_prompt, inputs=[expand_input], outputs=expand_output
                 )
 
             # ==================================================================
@@ -1367,22 +1657,24 @@ def create_ui():
                 with gr.Row():
                     with gr.Column(scale=2):
                         extract_image = gr.Image(label="Upload Image", type="numpy")
-                        extract_btn = gr.Button("🔍 Extract Prompt", variant="primary", size="lg")
+                        extract_btn = gr.Button(
+                            "🔍 Extract Prompt", variant="primary", size="lg"
+                        )
 
                     with gr.Column(scale=3):
                         extract_output = gr.Textbox(
-                            label="Extracted Prompt",
-                            lines=12,
-                            interactive=True
+                            label="Extracted Prompt", lines=12, interactive=True
                         )
                         with gr.Row():
-                            extract_send_to_refine = gr.Button("➡️ Send to Refine", size="sm")
-                            extract_send_to_edit = gr.Button("🎨 Send to Edit", size="sm")
+                            extract_send_to_refine = gr.Button(
+                                "➡️ Send to Refine", size="sm"
+                            )
+                            extract_send_to_edit = gr.Button(
+                                "🎨 Send to Edit", size="sm"
+                            )
 
                 extract_btn.click(
-                    fn=extract_prompt,
-                    inputs=[extract_image],
-                    outputs=extract_output
+                    fn=extract_prompt, inputs=[extract_image], outputs=extract_output
                 )
 
             # ==================================================================
@@ -1390,27 +1682,31 @@ def create_ui():
             # ==================================================================
             with gr.Tab("🎭 Bofonchio MC's Restyler"):
                 gr.Markdown("### Copy the style from any image")
-                gr.Markdown("*Upload an image and get a detailed style description to use in your prompts*")
+                gr.Markdown(
+                    "*Upload an image and get a detailed style description to use in your prompts*"
+                )
 
                 with gr.Row():
                     with gr.Column(scale=2):
                         style_image = gr.Image(label="Upload Image", type="numpy")
-                        style_btn = gr.Button("🎨 Analyze Style", variant="primary", size="lg")
+                        style_btn = gr.Button(
+                            "🎨 Analyze Style", variant="primary", size="lg"
+                        )
 
                     with gr.Column(scale=3):
                         style_output = gr.Textbox(
-                            label="Style Description",
-                            lines=12,
-                            interactive=True
+                            label="Style Description", lines=12, interactive=True
                         )
                         with gr.Row():
-                            style_send_to_refine = gr.Button("➡️ Send to Refine", size="sm")
-                            style_send_to_direct = gr.Button("📝 Send to Direct", size="sm")
+                            style_send_to_refine = gr.Button(
+                                "➡️ Send to Refine", size="sm"
+                            )
+                            style_send_to_direct = gr.Button(
+                                "📝 Send to Direct", size="sm"
+                            )
 
                 style_btn.click(
-                    fn=copy_style,
-                    inputs=[style_image],
-                    outputs=style_output
+                    fn=copy_style, inputs=[style_image], outputs=style_output
                 )
 
             # ==================================================================
@@ -1424,26 +1720,26 @@ def create_ui():
                         refine_current = gr.Textbox(
                             label="Current Prompt",
                             placeholder="Paste your current prompt here...",
-                            lines=6
+                            lines=6,
                         )
                         refine_instruction = gr.Textbox(
                             label="Refinement Instruction",
                             placeholder="e.g., 'change the hair to red' or 'add sunset lighting'",
-                            lines=3
+                            lines=3,
                         )
-                        refine_btn = gr.Button("🔧 Refine Prompt", variant="primary", size="lg")
+                        refine_btn = gr.Button(
+                            "🔧 Refine Prompt", variant="primary", size="lg"
+                        )
 
                     with gr.Column(scale=3):
                         refine_output = gr.Textbox(
-                            label="Refined Prompt",
-                            lines=12,
-                            interactive=True
+                            label="Refined Prompt", lines=12, interactive=True
                         )
 
                 refine_btn.click(
                     fn=refine_prompt,
                     inputs=[refine_current, refine_instruction],
-                    outputs=refine_output
+                    outputs=refine_output,
                 )
 
             # ==================================================================
@@ -1455,29 +1751,33 @@ def create_ui():
                 direct_prompt = gr.Textbox(
                     label="Your Prompt",
                     placeholder="Enter your complete prompt...",
-                    lines=10
+                    lines=10,
                 )
-                gr.Markdown("*Use the Image Generation section below to create the image*")
+                gr.Markdown(
+                    "*Use the Image Generation section below to create the image*"
+                )
 
             # ==================================================================
             # TAB 6: Edit Image
             # ==================================================================
             with gr.Tab("🎨 Edit Image"):
                 gr.Markdown("### Edit an image using AI instructions")
-                gr.Markdown("*Use edit models like **Qwen Image Edit**, **Flux Kontext**, or **Flux Klein** for best results*")
+                gr.Markdown(
+                    "*Use edit models like **Qwen Image Edit**, **Flux Kontext**, or **Flux Klein** for best results*"
+                )
 
                 with gr.Row():
                     with gr.Column(scale=2):
                         edit_image_input = gr.Image(
                             label="Image to Edit",
                             type="numpy",
-                            sources=["upload", "clipboard"]
+                            sources=["upload", "clipboard"],
                         )
                         edit_instruction = gr.Textbox(
                             label="Edit Instruction",
                             placeholder="e.g., 'Make it sunset', 'Add snow', 'Change hair to red'",
                             lines=3,
-                            interactive=True
+                            interactive=True,
                         )
 
                         with gr.Accordion("Generation Settings", open=True):
@@ -1487,39 +1787,49 @@ def create_ui():
                                 value="",
                                 interactive=True,
                                 allow_custom_value=True,
-                                info="Use Qwen Image Edit or similar edit models"
+                                info="Use Qwen Image Edit or similar edit models",
                             )
                             edit_preset = gr.Dropdown(
                                 label="Preset",
-                                choices=["Custom (no preset)"],  # Will be populated when model selected
+                                choices=[
+                                    "Custom (no preset)"
+                                ],  # Will be populated when model selected
                                 value="Custom (no preset)",
-                                interactive=True
+                                interactive=True,
                             )
                             edit_preset_info = gr.Textbox(
                                 label="Preset Info",
                                 value="Select a model first to see available presets",
                                 interactive=False,
-                                lines=2
+                                lines=2,
                             )
                             with gr.Row():
-                                edit_steps = gr.Slider(1, 100, 28, step=1, label="Steps")
-                                edit_cfg = gr.Slider(0.0, 20.0, 5.0, step=0.1, label="CFG Scale")
+                                edit_steps = gr.Slider(
+                                    1, 100, 28, step=1, label="Steps"
+                                )
+                                edit_cfg = gr.Slider(
+                                    0.0, 20.0, 5.0, step=0.1, label="CFG Scale"
+                                )
                             edit_sampler = gr.Dropdown(
                                 choices=SAMPLER_NAMES,
                                 value=SAMPLER_DEFAULT,
-                                label="Sampler"
+                                label="Sampler",
                             )
                             edit_tcd_gamma = gr.Slider(
-                                0.0, 1.0, 0.3,
+                                0.0,
+                                1.0,
+                                0.3,
                                 label="TCD Strategic Stochastic Sampling",
                                 step=0.05,
                                 visible=False,
-                                info="Strategic Stochastic Sampling gamma for TCD sampler (higher = more stochastic)"
+                                info="Strategic Stochastic Sampling gamma for TCD sampler (higher = more stochastic)",
                             )
                             edit_strength = gr.Slider(
-                                0.0, 1.0, 1.0,
+                                0.0,
+                                1.0,
+                                1.0,
                                 label="Strength",
-                                info="How much to modify (1.0=full edit, 0.75=moderate, 0.5=subtle)"
+                                info="How much to modify (1.0=full edit, 0.75=moderate, 0.5=subtle)",
                             )
 
                             # LoRA Support
@@ -1531,13 +1841,10 @@ def create_ui():
                                     value="None",
                                     interactive=True,
                                     allow_custom_value=True,
-                                    scale=3
+                                    scale=3,
                                 )
                                 edit_lora1_weight = gr.Slider(
-                                    0.0, 2.0, 1.0,
-                                    step=0.05,
-                                    label="Weight",
-                                    scale=1
+                                    0.0, 2.0, 1.0, step=0.05, label="Weight", scale=1
                                 )
                             with gr.Row():
                                 edit_lora2 = gr.Dropdown(
@@ -1546,45 +1853,42 @@ def create_ui():
                                     value="None",
                                     interactive=True,
                                     allow_custom_value=True,
-                                    scale=3
+                                    scale=3,
                                 )
                                 edit_lora2_weight = gr.Slider(
-                                    0.0, 2.0, 1.0,
-                                    step=0.05,
-                                    label="Weight",
-                                    scale=1
+                                    0.0, 2.0, 1.0, step=0.05, label="Weight", scale=1
                                 )
 
                         with gr.Accordion("Advanced Settings", open=False):
                             edit_negative = gr.Textbox(
                                 label="Negative Prompt",
                                 value="blurry, low quality, distorted",
-                                lines=2
+                                lines=2,
                             )
                             with gr.Row():
                                 edit_seed = gr.Number(
-                                    label="Seed (-1 = random)",
-                                    value=-1,
-                                    precision=0
+                                    label="Seed (-1 = random)", value=-1, precision=0
                                 )
                                 edit_clip_skip = gr.Slider(
-                                    1, 12, 1,
-                                    step=1,
-                                    label="CLIP Skip"
+                                    1, 12, 1, step=1, label="CLIP Skip"
                                 )
                             edit_shift = gr.Slider(
-                                0.0, 10.0, 3.0,
+                                0.0,
+                                10.0,
+                                3.0,
                                 step=0.1,
                                 label="Shift",
-                                info="Qwen Edit default: 3.0"
+                                info="Qwen Edit default: 3.0",
                             )
                             edit_res_shift = gr.Checkbox(
                                 value=False,
                                 label="Resolution-Dependent Shift",
-                                info="Auto-calculate shift based on resolution (for FLUX models)"
+                                info="Auto-calculate shift based on resolution (for FLUX models)",
                             )
 
-                        edit_btn = gr.Button("✨ Edit Image", variant="primary", size="lg")
+                        edit_btn = gr.Button(
+                            "✨ Edit Image", variant="primary", size="lg"
+                        )
 
                     with gr.Column(scale=3):
                         edit_result_image = gr.Image(label="Edited Result")
@@ -1606,91 +1910,130 @@ def create_ui():
 
                     llm_provider = gr.Radio(
                         choices=["LM Studio", "Ollama"],
-                        value=settings.get('llm_provider', 'LM Studio'),
+                        value=settings.get("llm_provider", "LM Studio"),
                         label="LLM Provider",
-                        info="Choose your LLM backend"
+                        info="Choose your LLM backend",
                     )
                     llm_server = gr.Textbox(
                         label="LLM Server URL",
-                        value=settings.get('llm_server', 'http://localhost:1234'),
-                        placeholder="LM Studio: http://localhost:1234 | Ollama: http://localhost:11434"
+                        value=settings.get("llm_server", "http://localhost:1234"),
+                        placeholder="LM Studio: http://localhost:1234 | Ollama: http://localhost:11434",
                     )
                     llm_model_dropdown = gr.Dropdown(
                         label="Text Model",
                         choices=[],
-                        value=settings.get('llm_model', ''),
+                        value=settings.get("llm_model", ""),
                         allow_custom_value=True,
                         interactive=True,
-                        info="For prompt expansion and refinement"
+                        info="For prompt expansion and refinement",
                     )
                     llm_vision_model_dropdown = gr.Dropdown(
                         label="Vision Model (for image analysis)",
                         choices=[],
-                        value=settings.get('llm_vision_model', ''),
+                        value=settings.get("llm_vision_model", ""),
                         allow_custom_value=True,
                         interactive=True,
-                        info="Required for 'Extract from Image' tab. Leave empty to use text model if it supports vision."
+                        info="Required for 'Extract from Image' tab. Leave empty to use text model if it supports vision.",
                     )
                     llm_connect_btn = gr.Button("Connect to LLM Server")
                     llm_status = gr.Textbox(label="Status", interactive=False, lines=5)
 
                     llm_connect_btn.click(
                         fn=init_llm,
-                        inputs=[llm_server, llm_model_dropdown, llm_vision_model_dropdown, llm_provider],
-                        outputs=[llm_status, llm_model_dropdown, llm_vision_model_dropdown]
+                        inputs=[
+                            llm_server,
+                            llm_model_dropdown,
+                            llm_vision_model_dropdown,
+                            llm_provider,
+                        ],
+                        outputs=[
+                            llm_status,
+                            llm_model_dropdown,
+                            llm_vision_model_dropdown,
+                        ],
                     )
 
                     # When user selects a model, initialize it
-                    def on_llm_model_change(server_url: str, model: str, vision_model: str, provider: str) -> str:
+                    def on_llm_model_change(
+                        server_url: str, model: str, vision_model: str, provider: str
+                    ) -> str:
                         if not model:
                             return "Please select a model"
                         try:
-                            provider_map = {'LM Studio': 'lm_studio', 'Ollama': 'ollama'}
-                            provider_key = provider_map.get(provider, 'lm_studio')
+                            provider_map = {
+                                "LM Studio": "lm_studio",
+                                "Ollama": "ollama",
+                            }
+                            provider_key = provider_map.get(provider, "lm_studio")
 
-                            settings.update_config(llm_model=model, llm_vision_model=vision_model, llm_provider=provider)
-                            state.llm_client, state.text_processor, state.vision_processor = create_ai_client(
+                            settings.update_config(
+                                llm_model=model,
+                                llm_vision_model=vision_model,
+                                llm_provider=provider,
+                            )
+                            (
+                                state.llm_client,
+                                state.text_processor,
+                                state.vision_processor,
+                            ) = create_ai_client(
                                 provider=provider_key,
                                 base_url=server_url,
                                 text_model=model,
-                                vision_model=vision_model or model  # Use text model if no vision model
+                                vision_model=vision_model
+                                or model,  # Use text model if no vision model
                             )
-                            vision_info = f" / Vision: {vision_model}" if vision_model else ""
-                            return f"✅ Models loaded: {model}{vision_info} ({provider})"
+                            vision_info = (
+                                f" / Vision: {vision_model}" if vision_model else ""
+                            )
+                            return (
+                                f"✅ Models loaded: {model}{vision_info} ({provider})"
+                            )
                         except Exception as e:
                             return f"❌ Failed to load model: {str(e)}"
 
                     llm_model_dropdown.change(
                         fn=on_llm_model_change,
-                        inputs=[llm_server, llm_model_dropdown, llm_vision_model_dropdown, llm_provider],
-                        outputs=llm_status
+                        inputs=[
+                            llm_server,
+                            llm_model_dropdown,
+                            llm_vision_model_dropdown,
+                            llm_provider,
+                        ],
+                        outputs=llm_status,
                     )
 
                     llm_vision_model_dropdown.change(
                         fn=on_llm_model_change,
-                        inputs=[llm_server, llm_model_dropdown, llm_vision_model_dropdown, llm_provider],
-                        outputs=llm_status
+                        inputs=[
+                            llm_server,
+                            llm_model_dropdown,
+                            llm_vision_model_dropdown,
+                            llm_provider,
+                        ],
+                        outputs=llm_status,
                     )
 
                 with gr.Accordion("gRPC Settings", open=True):
                     grpc_server = gr.Textbox(
                         label="gRPC Server Address",
-                        value=settings.get('grpc_server', 'localhost:7859'),
-                        placeholder="localhost:7859"
+                        value=settings.get("grpc_server", "localhost:7859"),
+                        placeholder="localhost:7859",
                     )
                     grpc_connect_btn = gr.Button("Connect to gRPC Server")
-                    grpc_status = gr.Textbox(label="Status", interactive=False, lines=10)
+                    grpc_status = gr.Textbox(
+                        label="Status", interactive=False, lines=10
+                    )
                     grpc_model_dropdown = gr.Dropdown(
                         label="Available Models",
                         choices=[],
                         allow_custom_value=True,
-                        filterable=True
+                        filterable=True,
                     )
                     grpc_lora_dropdown = gr.Dropdown(
                         label="Available LoRAs",
                         choices=[],
                         allow_custom_value=True,
-                        filterable=True
+                        filterable=True,
                     )
 
                     # Note: We'll wire up the connection button outputs below after creating gen_model and gen_lora
@@ -1707,7 +2050,7 @@ def create_ui():
                         label="Version Information",
                         value=f"Current Version: {APP_VERSION}",
                         interactive=False,
-                        lines=2
+                        lines=2,
                     )
 
                     # Check button
@@ -1715,25 +2058,23 @@ def create_ui():
 
                     # Status textbox
                     update_status = gr.Textbox(
-                        label="Status",
-                        interactive=False,
-                        lines=8
+                        label="Status", interactive=False, lines=8
                     )
 
                     # Update button
-                    update_apply_btn = gr.Button("Update Now", variant="primary", size="sm")
+                    update_apply_btn = gr.Button(
+                        "Update Now", variant="primary", size="sm"
+                    )
 
                     # Wire up update callbacks
                     update_check_btn.click(
                         fn=check_for_updates,
                         inputs=[],
-                        outputs=[update_status, update_version_info]
+                        outputs=[update_status, update_version_info],
                     )
 
                     update_apply_btn.click(
-                        fn=apply_update,
-                        inputs=[],
-                        outputs=[update_status]
+                        fn=apply_update, inputs=[], outputs=[update_status]
                     )
 
                 with gr.Accordion("System Prompts", open=False):
@@ -1757,22 +2098,22 @@ def create_ui():
                 gen_prompt = gr.Textbox(
                     label="Final Prompt",
                     placeholder="Your prompt will appear here from the tabs above, or type directly",
-                    lines=8
+                    lines=8,
                 )
 
                 gen_model = gr.Dropdown(
                     label="Model",
                     choices=[],
-                    value=settings.get('last_used_model', ''),
+                    value=settings.get("last_used_model", ""),
                     allow_custom_value=True,
-                    filterable=True
+                    filterable=True,
                 )
 
                 gen_preset = gr.Dropdown(
                     label="Preset",
                     choices=["Custom (no preset)"],
                     value="Custom (no preset)",
-                    interactive=True
+                    interactive=True,
                 )
 
                 with gr.Row():
@@ -1782,13 +2123,10 @@ def create_ui():
                         value="None",
                         allow_custom_value=True,
                         filterable=True,
-                        scale=3
+                        scale=3,
                     )
                     gen_lora1_weight = gr.Slider(
-                        0.0, 2.0, 1.0,
-                        label="Weight",
-                        step=0.05,
-                        scale=1
+                        0.0, 2.0, 1.0, label="Weight", step=0.05, scale=1
                     )
 
                 with gr.Row():
@@ -1798,67 +2136,71 @@ def create_ui():
                         value="None",
                         allow_custom_value=True,
                         filterable=True,
-                        scale=3
+                        scale=3,
                     )
                     gen_lora2_weight = gr.Slider(
-                        0.0, 2.0, 1.0,
-                        label="Weight",
-                        step=0.05,
-                        scale=1
+                        0.0, 2.0, 1.0, label="Weight", step=0.05, scale=1
                     )
 
                 with gr.Row():
                     gen_steps = gr.Slider(
-                        1, 150, settings.get('default_steps', 16),
-                        label="Steps",
-                        step=1
+                        1, 150, settings.get("default_steps", 16), label="Steps", step=1
                     )
                     gen_cfg = gr.Slider(
-                        1.0, 20.0, settings.get('default_cfg', 7.0),
+                        1.0,
+                        20.0,
+                        settings.get("default_cfg", 7.0),
                         label="CFG Scale",
-                        step=0.5
+                        step=0.5,
                     )
 
                 gen_sampler = gr.Dropdown(
-                    choices=SAMPLER_NAMES,
-                    value=SAMPLER_DEFAULT,
-                    label="Sampler"
+                    choices=SAMPLER_NAMES, value=SAMPLER_DEFAULT, label="Sampler"
                 )
 
                 gen_tcd_gamma = gr.Slider(
-                    0.0, 1.0, 0.3,
+                    0.0,
+                    1.0,
+                    0.3,
                     label="TCD Strategic Stochastic Sampling",
                     step=0.05,
                     visible=False,
-                    info="Strategic Stochastic Sampling gamma for TCD sampler (higher = more stochastic)"
+                    info="Strategic Stochastic Sampling gamma for TCD sampler (higher = more stochastic)",
                 )
 
                 gen_clip_skip = gr.Slider(
-                    1, 12, 1,
+                    1,
+                    12,
+                    1,
                     label="CLIP Skip",
                     step=1,
-                    info="CLIP layers to skip (1=default, Pony/Illustrious need 2)"
+                    info="CLIP layers to skip (1=default, Pony/Illustrious need 2)",
                 )
 
                 # Pre-populate with 1024 base resolution defaults
-                default_aspects = [label for label, _, _ in settings.load_aspect_ratios(1024)]
+                default_aspects = [
+                    label for label, _, _ in settings.load_aspect_ratios(1024)
+                ]
                 gen_aspect = gr.Dropdown(
                     label="Aspect Ratio",
                     choices=default_aspects,  # Pre-populated, will update when model selected
-                    value=settings.get('default_aspect_ratio', default_aspects[4] if len(default_aspects) > 4 else default_aspects[0])
+                    value=settings.get(
+                        "default_aspect_ratio",
+                        default_aspects[4]
+                        if len(default_aspects) > 4
+                        else default_aspects[0],
+                    ),
                 )
 
                 gen_resolution_scale = gr.Dropdown(
                     label="Resolution Scale",
                     choices=["0.5x", "1x", "1.5x", "2x", "2.5x", "3x", "4x"],
                     value="1x",
-                    info="Multiply aspect ratio resolution (useful for high-res fix)"
+                    info="Multiply aspect ratio resolution (useful for high-res fix)",
                 )
 
                 gen_seed = gr.Number(
-                    label="Seed (-1 for random)",
-                    value=-1,
-                    precision=0
+                    label="Seed (-1 for random)", value=-1, precision=0
                 )
 
                 # Load negative prompt presets
@@ -1870,19 +2212,15 @@ def create_ui():
                     choices=negative_prompt_choices,
                     value=None,
                     interactive=True,
-                    info="Quick select common negative prompts"
+                    info="Quick select common negative prompts",
                 )
 
                 gen_negative = gr.Textbox(
-                    label="Negative Prompt",
-                    placeholder="What to avoid...",
-                    lines=3
+                    label="Negative Prompt", placeholder="What to avoid...", lines=3
                 )
 
                 gen_preset_info = gr.Textbox(
-                    label="Model Preset Info",
-                    interactive=False,
-                    lines=2
+                    label="Model Preset Info", interactive=False, lines=2
                 )
 
                 # Advanced Settings
@@ -1890,30 +2228,34 @@ def create_ui():
                     gr.Markdown("*Optional advanced generation parameters*")
 
                     gen_shift = gr.Slider(
-                        0.0, 10.0, 1.0,
+                        0.0,
+                        10.0,
+                        1.0,
                         label="Shift",
                         step=0.1,
-                        info="Timestep shift for generation (1.0 is default)"
+                        info="Timestep shift for generation (1.0 is default)",
                     )
 
                     gen_res_shift = gr.Checkbox(
                         value=False,
                         label="Resolution Dependent Shift",
-                        info="Automatically adjust shift based on resolution (calculated client-side)"
+                        info="Automatically adjust shift based on resolution (calculated client-side)",
                     )
 
                     gen_seed_mode = gr.Slider(
-                        0, 5, 2,
+                        0,
+                        5,
+                        2,
                         label="Seed Mode",
                         step=1,
-                        info="Random seed generation mode (2 is default)"
+                        info="Random seed generation mode (2 is default)",
                     )
 
                     # High-Res Fix settings
                     gen_hires = gr.Checkbox(
                         value=False,
                         label="Enable High-Res Fix",
-                        info="Two-pass generation: low-res composition + high-res refinement (better quality)"
+                        info="Two-pass generation: low-res composition + high-res refinement (better quality)",
                     )
 
                     with gr.Row(visible=False) as gen_hires_row:
@@ -1921,31 +2263,33 @@ def create_ui():
                             value=512,
                             label="Start Width (pixels)",
                             info="Starting width for first pass (e.g., 512px for SD 1.5)",
-                            step=64
+                            step=64,
                         )
                         gen_hires_start_height = gr.Number(
                             value=512,
                             label="Start Height (pixels)",
                             info="Starting height for first pass (e.g., 512px for SD 1.5)",
-                            step=64
+                            step=64,
                         )
                         gen_hires_strength = gr.Slider(
-                            0.0, 1.0, 0.7,
+                            0.0,
+                            1.0,
+                            0.7,
                             label="Refinement Strength",
-                            info="How much to modify in second pass (0.7 recommended)"
+                            info="How much to modify in second pass (0.7 recommended)",
                         )
 
                     # Performance optimizations
                     gen_tea_cache = gr.Checkbox(
                         value=False,
                         label="Enable TeaCache",
-                        info="Timestep Embedding Aware Cache - accelerates generation (training-free)"
+                        info="Timestep Embedding Aware Cache - accelerates generation (training-free)",
                     )
 
                     gen_live_preview = gr.Checkbox(
                         value=False,
                         label="Live Preview",
-                        info="Show latent preview during sampling (experimental)"
+                        info="Show latent preview during sampling (experimental)",
                     )
 
                     # Hidden placeholders for removed settings (kept for preset compatibility)
@@ -1961,48 +2305,84 @@ def create_ui():
         gen_model.change(
             fn=on_model_selected,
             inputs=[gen_model],
-            outputs=[gen_preset, gen_preset_info, gen_aspect]
+            outputs=[gen_preset, gen_preset_info, gen_aspect],
         )
 
         # Preset selection updates all settings
         gen_preset.change(
             fn=on_preset_selected,
             inputs=[gen_preset],
-            outputs=[gen_steps, gen_cfg, gen_preset_info, gen_sampler,
-                    gen_shift, gen_res_shift, gen_seed_mode, gen_cfg_zero, gen_hires,
-                    gen_hires_start_width, gen_hires_start_height, gen_hires_strength, gen_clip_skip, gen_tea_cache, gen_aspect]
+            outputs=[
+                gen_steps,
+                gen_cfg,
+                gen_preset_info,
+                gen_sampler,
+                gen_shift,
+                gen_res_shift,
+                gen_seed_mode,
+                gen_cfg_zero,
+                gen_hires,
+                gen_hires_start_width,
+                gen_hires_start_height,
+                gen_hires_strength,
+                gen_clip_skip,
+                gen_tea_cache,
+                gen_aspect,
+            ],
         )
 
         # Toggle hires fix controls visibility
         gen_hires.change(
             fn=lambda enabled: gr.update(visible=enabled),
             inputs=[gen_hires],
-            outputs=[gen_hires_row]
+            outputs=[gen_hires_row],
         )
 
         # Toggle TCD gamma slider visibility based on sampler
         gen_sampler.change(
             fn=lambda sampler: gr.update(visible=(sampler == "TCD")),
             inputs=[gen_sampler],
-            outputs=[gen_tcd_gamma]
+            outputs=[gen_tcd_gamma],
         )
 
         # Negative prompt preset selection
         gen_negative_preset.change(
             fn=on_negative_prompt_preset_selected,
             inputs=[gen_negative_preset],
-            outputs=[gen_negative]
+            outputs=[gen_negative],
         )
 
         # Connect outputs to generation
         gen_btn.click(
             fn=generate_image,
-            inputs=[gen_prompt, gen_model, gen_lora1, gen_lora1_weight, gen_lora2, gen_lora2_weight,
-                   gen_steps, gen_cfg, gen_sampler, gen_aspect, gen_resolution_scale, gen_seed, gen_negative,
-                   gen_shift, gen_res_shift, gen_seed_mode, gen_cfg_zero, gen_hires,
-                   gen_hires_start_width, gen_hires_start_height, gen_hires_strength, gen_clip_skip, gen_tea_cache, gen_tcd_gamma,
-                   gen_live_preview],
-            outputs=[gen_image, gen_status]
+            inputs=[
+                gen_prompt,
+                gen_model,
+                gen_lora1,
+                gen_lora1_weight,
+                gen_lora2,
+                gen_lora2_weight,
+                gen_steps,
+                gen_cfg,
+                gen_sampler,
+                gen_aspect,
+                gen_resolution_scale,
+                gen_seed,
+                gen_negative,
+                gen_shift,
+                gen_res_shift,
+                gen_seed_mode,
+                gen_cfg_zero,
+                gen_hires,
+                gen_hires_start_width,
+                gen_hires_start_height,
+                gen_hires_strength,
+                gen_clip_skip,
+                gen_tea_cache,
+                gen_tcd_gamma,
+                gen_live_preview,
+            ],
+            outputs=[gen_image, gen_status],
         )
 
         # Link outputs from tabs to the generation prompt field
@@ -2013,44 +2393,71 @@ def create_ui():
         direct_prompt.change(lambda x: x, inputs=direct_prompt, outputs=gen_prompt)
 
         # Send to Refine buttons
-        expand_send_to_refine.click(lambda x: x, inputs=expand_output, outputs=refine_current)
-        extract_send_to_refine.click(lambda x: x, inputs=extract_output, outputs=refine_current)
-        style_send_to_refine.click(lambda x: x, inputs=style_output, outputs=refine_current)
+        expand_send_to_refine.click(
+            lambda x: x, inputs=expand_output, outputs=refine_current
+        )
+        extract_send_to_refine.click(
+            lambda x: x, inputs=extract_output, outputs=refine_current
+        )
+        style_send_to_refine.click(
+            lambda x: x, inputs=style_output, outputs=refine_current
+        )
 
         # Send to Direct buttons
-        style_send_to_direct.click(lambda x: x, inputs=style_output, outputs=direct_prompt)
+        style_send_to_direct.click(
+            lambda x: x, inputs=style_output, outputs=direct_prompt
+        )
 
         # Send to Edit buttons
-        expand_send_to_edit.click(lambda x: x, inputs=expand_output, outputs=edit_instruction)
+        expand_send_to_edit.click(
+            lambda x: x, inputs=expand_output, outputs=edit_instruction
+        )
         extract_send_to_edit.click(
             lambda img, prompt: (img, prompt),
             inputs=[extract_image, extract_output],
-            outputs=[edit_image_input, edit_instruction]
+            outputs=[edit_image_input, edit_instruction],
         )
 
         # Edit Image button
         edit_btn.click(
             fn=edit_image,
-            inputs=[edit_image_input, edit_instruction, edit_model, edit_steps, edit_cfg,
-                   edit_sampler, edit_strength, edit_lora1, edit_lora1_weight,
-                   edit_lora2, edit_lora2_weight, edit_negative, edit_seed,
-                   edit_clip_skip, edit_shift, edit_res_shift, edit_tcd_gamma,
-                   gen_live_preview],
-            outputs=[edit_result_image, edit_status]
+            inputs=[
+                edit_image_input,
+                edit_instruction,
+                edit_model,
+                edit_steps,
+                edit_cfg,
+                edit_sampler,
+                edit_strength,
+                edit_lora1,
+                edit_lora1_weight,
+                edit_lora2,
+                edit_lora2_weight,
+                edit_negative,
+                edit_seed,
+                edit_clip_skip,
+                edit_shift,
+                edit_res_shift,
+                edit_tcd_gamma,
+                gen_live_preview,
+            ],
+            outputs=[edit_result_image, edit_status],
         )
 
         # Edit tab model selection updates preset choices
         edit_model.change(
-            fn=lambda model_name: on_model_selected(model_name)[0:2],  # Return preset dropdown and info only
+            fn=lambda model_name: on_model_selected(model_name)[
+                0:2
+            ],  # Return preset dropdown and info only
             inputs=[edit_model],
-            outputs=[edit_preset, edit_preset_info]
+            outputs=[edit_preset, edit_preset_info],
         )
 
         # Toggle TCD gamma slider visibility in Edit tab
         edit_sampler.change(
             fn=lambda sampler: gr.update(visible=(sampler == "TCD")),
             inputs=[edit_sampler],
-            outputs=[edit_tcd_gamma]
+            outputs=[edit_tcd_gamma],
         )
 
         # Edit tab preset selection updates settings (only the ones that exist in Edit tab)
@@ -2059,14 +2466,28 @@ def create_ui():
             result = on_preset_selected(preset_name)
             # Extract: steps, cfg, info, sampler, shift, res_shift, clip_skip
             # Skip: seed_mode, cfg_zero, hires, hires_width, hires_height, hires_strength, tea_cache
-            return (result[0], result[1], result[2], result[3],
-                    result[4], result[5], result[12])  # steps, cfg, info, sampler, shift, res_shift, clip_skip
+            return (
+                result[0],
+                result[1],
+                result[2],
+                result[3],
+                result[4],
+                result[5],
+                result[12],
+            )  # steps, cfg, info, sampler, shift, res_shift, clip_skip
 
         edit_preset.change(
             fn=on_edit_preset_selected,
             inputs=[edit_preset],
-            outputs=[edit_steps, edit_cfg, edit_preset_info, edit_sampler,
-                    edit_shift, edit_res_shift, edit_clip_skip]
+            outputs=[
+                edit_steps,
+                edit_cfg,
+                edit_preset_info,
+                edit_sampler,
+                edit_shift,
+                edit_res_shift,
+                edit_clip_skip,
+            ],
         )
 
         # Wire up gRPC connection to update ALL dropdowns (settings, generation, and edit)
@@ -2076,14 +2497,32 @@ def create_ui():
             status, models_dropdown, loras_dropdown = init_grpc(server_url)
             # Return: status, settings_models, settings_loras, gen_models, gen_lora1, gen_lora2,
             #         edit_model, edit_lora1, edit_lora2
-            return (status, models_dropdown, loras_dropdown, models_dropdown, loras_dropdown,
-                   loras_dropdown, models_dropdown, loras_dropdown, loras_dropdown)
+            return (
+                status,
+                models_dropdown,
+                loras_dropdown,
+                models_dropdown,
+                loras_dropdown,
+                loras_dropdown,
+                models_dropdown,
+                loras_dropdown,
+                loras_dropdown,
+            )
 
         grpc_connect_btn.click(
             fn=init_grpc_all,
             inputs=[grpc_server],
-            outputs=[grpc_status, grpc_model_dropdown, grpc_lora_dropdown, gen_model, gen_lora1,
-                    gen_lora2, edit_model, edit_lora1, edit_lora2]
+            outputs=[
+                grpc_status,
+                grpc_model_dropdown,
+                grpc_lora_dropdown,
+                gen_model,
+                gen_lora1,
+                gen_lora2,
+                edit_model,
+                edit_lora1,
+                edit_lora2,
+            ],
         )
 
     return app
@@ -2105,5 +2544,5 @@ if __name__ == "__main__":
         server_port=7860,
         share=False,
         favicon_path=None,
-        pwa=True
+        pwa=True,
     )

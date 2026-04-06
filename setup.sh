@@ -24,6 +24,7 @@ pip install -r requirements.txt
 # Install DTgRPCconnector requirements
 echo "📥 Installing DTgRPCconnector requirements..."
 pip install -r dev/DTgRPCconnector/requirements.txt
+pip install "flatbuffers>=24.3.0"  # Override for Python 3.13+ compatibility (aarch64 piwheels fix)
 
 # Install ModuLLe
 echo "📥 Installing ModuLLe..."
