@@ -1,0 +1,5 @@
+{
+  "name": "Anima (Base)",
+  "description": "Recommended negative prompt for Anima base model",
+  "negative_prompt": "worst quality, low quality, score_1, score_2, score_3, artist name"
+}

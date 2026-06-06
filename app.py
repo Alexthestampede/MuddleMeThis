@@ -196,6 +196,109 @@ def expand_prompt(user_prompt: str) -> str:
         return f"❌ Error: {str(e)}"
 
 
+def expand_prompt_advanced(user_prompt: str, expander_name: str, aspect_ratio_label: str) -> str:
+    """Expand a brief prompt using a specific expander with optional aspect ratio
+    
+    Args:
+        user_prompt: The brief prompt to expand
+        expander_name: Name of the expander to use (e.g., 'default', 'ernie_en', 'ernie_cn')
+        aspect_ratio_label: Aspect ratio label like "1:1 1024x1024" or "1:1 512x512", can be empty
+        
+    Returns:
+        Expanded prompt text, extracted from code blocks if present
+    """
+    if not state.text_processor:
+        return "❌ LLM not initialized. Configure in Settings tab first."
+
+    if not user_prompt.strip():
+        return "❌ Please enter a prompt to expand"
+    
+    if not expander_name:
+        expander_name = "default"
+    
+    try:
+        # Load the expander system prompt
+        system_prompt = settings.load_expander_prompt(expander_name)
+        
+        if not system_prompt:
+            # Fallback to default if expander not found
+            system_prompt = settings.load_expander_prompt("default")
+            if not system_prompt:
+                # Last resort: simple expansion
+                result = state.text_processor.generate(
+                    prompt=user_prompt, system_prompt=None
+                )
+                if result:
+                    state.current_prompt = result
+                    return result
+                return "❌ Failed to generate expansion"
+        
+        # Prepare the prompt based on whether aspect ratio is provided
+        if aspect_ratio_label and "ernie" in expander_name.lower():
+            # Parse aspect ratio label to get width and height
+            # Format: "1:1 1024x1024" - extract the dimensions
+            try:
+                # Split by space and take the last part (should be WxH)
+                parts = aspect_ratio_label.split()
+                if len(parts) >= 2:
+                    dims = parts[-1]  # e.g., "1024x1024"
+                    width, height = dims.split('x')
+                    width = int(width)
+                    height = int(height)
+                    
+                    # Format as JSON for Ernie-style expanders
+                    prompt_input = f'{{"prompt": "{user_prompt}", "width": {width}, "height": {height}}}'
+                else:
+                    # Fallback to simple prompt
+                    prompt_input = user_prompt
+            except (ValueError, IndexError):
+                # If parsing fails, use simple prompt
+                prompt_input = user_prompt
+        else:
+            # For default expander or when no aspect ratio selected
+            prompt_input = user_prompt
+        
+        # Generate the expanded prompt
+        result = state.text_processor.generate(
+            prompt=prompt_input, system_prompt=system_prompt
+        )
+        
+        if result:
+            # Parse response: extract content from markdown code blocks if present
+            # Look for ``` or ```text blocks
+            lines = result.split('\n')
+            in_code_block = False
+            code_content = []
+            
+            for line in lines:
+                stripped = line.strip()
+                # Check for code block start/end
+                if stripped.startswith('```'):
+                    if not in_code_block:
+                        # Starting code block
+                        in_code_block = True
+                        continue  # Skip the ``` line
+                    else:
+                        # Ending code block
+                        in_code_block = False
+                        break  # Stop at end of code block
+                elif in_code_block:
+                    code_content.append(line)
+            
+            # If we found code block content, use it; otherwise use the whole result
+            if code_content:
+                expanded = '\n'.join(code_content).strip()
+            else:
+                expanded = result.strip()
+            
+            state.current_prompt = expanded
+            return expanded
+        
+        return "❌ Failed to generate expansion"
+    except Exception as e:
+        return f"❌ Error: {str(e)}"
+
+
 def extract_prompt(image) -> str:
     """Extract prompt from uploaded image"""
     if not state.vision_processor:
@@ -1623,6 +1726,29 @@ def create_ui():
 
                 with gr.Row():
                     with gr.Column(scale=2):
+                        # Load available expanders
+                        expander_names = list(settings.load_expander_prompts().keys())
+                        if "default" not in expander_names:
+                            expander_names.insert(0, "default")
+                        
+                        expander_dropdown = gr.Dropdown(
+                            label="Expander",
+                            choices=expander_names,
+                            value="default",
+                            info="Choose an expander algorithm (add custom .txt files to settings/expanders/)",
+                        )
+                        
+                        # Aspect ratio dropdown (optional, for Ernie-style expanders)
+                        default_aspects = [
+                            label for label, _, _ in settings.load_aspect_ratios(1024)
+                        ]
+                        expand_aspect_ratio = gr.Dropdown(
+                            label="Aspect Ratio (Optional)",
+                            choices=["(none)"] + default_aspects,
+                            value="(none)",
+                            info="Required for Ernie expanders, optional for others",
+                        )
+                        
                         expand_input = gr.Textbox(
                             label="Brief Prompt",
                             placeholder="Enter a short prompt (e.g., 'a peaceful garden')",
@@ -1634,7 +1760,7 @@ def create_ui():
 
                     with gr.Column(scale=3):
                         expand_output = gr.Textbox(
-                            label="Expanded Prompt", lines=12, interactive=True
+                            label="Expanded Prompt", lines=15, interactive=True
                         )
                         with gr.Row():
                             expand_send_to_refine = gr.Button(
@@ -1645,7 +1771,9 @@ def create_ui():
                             )
 
                 expand_btn.click(
-                    fn=expand_prompt, inputs=[expand_input], outputs=expand_output
+                    fn=expand_prompt_advanced, 
+                    inputs=[expand_input, expander_dropdown, expand_aspect_ratio], 
+                    outputs=expand_output
                 )
 
             # ==================================================================

@@ -1,0 +1,12 @@
+{
+  "name": "Anima Base (Official)",
+  "description": "Official Draw Things preset for Anima base model",
+  "base_resolution": 1024,
+  "clip_skip": 1,
+  "recommended_steps": 30,
+  "recommended_cfg": 4.0,
+  "sampler": "DDIM Trailing",
+  "shift": 1.0,
+  "resolutionDependentShift": true,
+  "notes": "Base model settings. Recommended negative: 'Anima (Base)'. For faster generation use anima_turbo preset. Model: https://huggingface.co/circlestone-labs/Anima"
+}

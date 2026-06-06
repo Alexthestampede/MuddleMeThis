@@ -18,11 +18,13 @@ class SettingsManager:
         self.config_example = self.settings_dir / "config.example.json"
         self.presets_dir = self.settings_dir / "presets"
         self.negative_prompts_dir = self.settings_dir / "negative_prompts"
+        self.expanders_dir = self.settings_dir / "expanders"
 
         # Ensure directories exist
         self.settings_dir.mkdir(exist_ok=True)
         self.presets_dir.mkdir(exist_ok=True)
         self.negative_prompts_dir.mkdir(exist_ok=True)
+        self.expanders_dir.mkdir(exist_ok=True)
 
         # Load or create config
         self.config = self.load_config()
@@ -86,6 +88,45 @@ class SettingsManager:
             return prompt_file.read_text().strip()
         else:
             print(f"Warning: System prompt file not found: {prompt_file}")
+            return ""
+
+    def load_expander_prompts(self) -> Dict[str, str]:
+        """Load all expander prompts from expanders/ folder
+
+        Returns:
+            Dict mapping expander names to their system prompt text
+        """
+        expanders = {}
+
+        if not self.expanders_dir.exists():
+            return expanders
+
+        for expander_file in self.expanders_dir.glob("*.txt"):
+            try:
+                prompt_text = expander_file.read_text().strip()
+                # Use filename (without .txt) as key
+                expander_name = expander_file.stem
+                expanders[expander_name] = prompt_text
+            except Exception as e:
+                print(f"Warning: Failed to load expander {expander_file}: {e}")
+
+        return expanders
+
+    def load_expander_prompt(self, expander_name: str) -> str:
+        """Load a specific expander prompt
+
+        Args:
+            expander_name: Name of the expander (filename without .txt)
+
+        Returns:
+            System prompt text, or empty string if file doesn't exist
+        """
+        expander_file = self.expanders_dir / f"{expander_name}.txt"
+
+        if expander_file.exists():
+            return expander_file.read_text().strip()
+        else:
+            print(f"Warning: Expander file not found: {expander_file}")
             return ""
 
     def load_aspect_ratios(self, base_resolution: int = 1024) -> List[Tuple[str, int, int]]:

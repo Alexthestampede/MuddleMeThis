@@ -1,0 +1,15 @@
+{
+  "name": "Anima Turbo LoRA (Recommended)",
+  "description": "Anima with turbo LoRA for fast high-quality generation",
+  "base_resolution": 1024,
+  "clip_skip": 1,
+  "recommended_steps": 8,
+  "recommended_cfg": 1.0,
+  "sampler": "DDIM Trailing",
+  "shift": 3.16,
+  "resolutionDependentShift": true,
+  "loras": [
+    {"file": "anima_turbo_lora_v0.2_lora_f16.ckpt", "weight": 1.0}
+  ],
+  "notes": "RECOMMENDED: Turbo LoRA reduces steps from 30 to 8 with minimal quality loss. Requires anima_turbo_lora_v0.2_lora_f16.ckpt. Base model: https://huggingface.co/circlestone-labs/Anima"
+}
