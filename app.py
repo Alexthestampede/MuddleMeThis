@@ -16,6 +16,8 @@ import os
 import subprocess
 import time
 import hashlib
+import json
+from math import gcd
 from pathlib import Path
 from typing import Optional, Tuple, List
 from datetime import datetime
@@ -411,6 +413,303 @@ def refine_prompt(current_prompt: str, refinement_instruction: str) -> str:
         return "❌ Failed to refine prompt"
     except Exception as e:
         return f"❌ Error: {str(e)}"
+
+
+def parse_aspect_ratio_label(aspect_ratio_label: str) -> str:
+    """Convert an aspect ratio label like '1:1 1024x1024' to 'W:H' format.
+
+    Args:
+        aspect_ratio_label: Label from the aspect ratio dropdown
+
+    Returns:
+        String in "W:H" form, defaults to "1:1"
+    """
+    if not aspect_ratio_label or aspect_ratio_label == "(none)":
+        return "1:1"
+
+    parts = aspect_ratio_label.split()
+    if not parts:
+        return "1:1"
+
+    # First part is usually the ratio, e.g. "1:1"
+    if ":" in parts[0]:
+        return parts[0]
+
+    # Fallback: derive from dimensions like "1024x1024"
+    for part in parts:
+        if "x" in part:
+            try:
+                width, height = part.split("x")
+                width = int(width)
+                height = int(height)
+                divisor = gcd(width, height)
+                return f"{width // divisor}:{height // divisor}"
+            except (ValueError, ZeroDivisionError):
+                continue
+
+    return "1:1"
+
+
+def _extract_and_repair_json(text: str) -> str:
+    """Extract a valid JSON object from LLM output, with common-truncation repairs.
+
+    Args:
+        text: Raw LLM output
+
+    Returns:
+        Valid JSON string
+
+    Raises:
+        ValueError: If no valid JSON can be extracted or repaired
+    """
+    text = text.strip()
+
+    # Remove markdown code fences if present
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+
+    # 1. Direct parse attempt
+    try:
+        json.loads(text)
+        return text
+    except json.JSONDecodeError:
+        pass
+
+    # 2. Extract between first '{' and last '}'
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        candidate = text[start : end + 1]
+        try:
+            json.loads(candidate)
+            return candidate
+        except json.JSONDecodeError:
+            pass
+
+    # 3. Repair known Ideogram truncation: missing opening brace / key prefix
+    stripped = text.lstrip()
+    if stripped.startswith("_ratio"):
+        # Missing "{\"aspect" prefix
+        repaired = '{"aspect' + stripped
+        try:
+            json.loads(repaired)
+            return repaired
+        except json.JSONDecodeError:
+            pass
+    elif stripped.startswith('"aspect_ratio"'):
+        # Missing opening '{'
+        repaired = "{" + stripped
+        try:
+            json.loads(repaired)
+            return repaired
+        except json.JSONDecodeError:
+            pass
+
+    # 4. Balance braces by appending missing '}'
+    open_count = text.count("{")
+    close_count = text.count("}")
+    if open_count > close_count:
+        repaired = text + "}" * (open_count - close_count)
+        try:
+            json.loads(repaired)
+            return repaired
+        except json.JSONDecodeError:
+            pass
+
+    raise ValueError(f"Could not extract valid JSON from: {text[:300]}")
+
+
+def _build_fallback_ideogram_json(prompt: str, aspect_ratio: str) -> str:
+    """Build a minimal valid Ideogram JSON when the LLM fails.
+
+    Keeps the user's original wording in high_level_description and a single element.
+    """
+    safe_prompt = prompt.strip().replace('"', "'")
+    fallback = {
+        "aspect_ratio": aspect_ratio,
+        "high_level_description": safe_prompt[:200],
+        "compositional_deconstruction": {
+            "background": "",
+            "elements": [
+                {
+                    "type": "obj",
+                    "desc": safe_prompt[:500],
+                }
+            ],
+        },
+    }
+    return json.dumps(fallback, separators=(",", ":"), ensure_ascii=False)
+
+
+def _xml_escape(text: str) -> str:
+    """Escape text for safe inclusion in XML/XMP chunks."""
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
+def build_draw_things_xmp(
+    prompt: str,
+    negative_prompt: str,
+    model: str,
+    width: int,
+    height: int,
+    steps: int,
+    sampler_name: str,
+    cfg_scale: float,
+    seed: int,
+    shift: float,
+    lora1: Optional[str] = None,
+    lora1_weight: float = 1.0,
+    lora2: Optional[str] = None,
+    lora2_weight: float = 1.0,
+    strength: float = 1.0,
+    seed_mode: int = 2,
+    clip_skip: int = 1,
+) -> str:
+    """Build an XMP metadata block matching Draw Things' PNG structure.
+
+    This lets images saved by MuddleMeThis carry compatible metadata with
+    Draw Things and other Stable Diffusion tools.
+    """
+    size = f"{width}x{height}"
+
+    # Human-readable parameter line (matches Draw Things dc:description format)
+    params = [
+        f"Steps: {steps}",
+        f"Sampler: {sampler_name}",
+        f"Guidance Scale: {cfg_scale}",
+        f"Seed: {seed}",
+        f"Size: {size}",
+        f"Model: {model}",
+        f"Strength: {strength}",
+        f"Seed Mode: {seed_mode}",
+        f"Shift: {shift}",
+    ]
+    if lora1 and lora1 != "None":
+        params.append(f"LoRA Model: {lora1}")
+        params.append(f"LoRA Weight: {lora1_weight}")
+    if lora2 and lora2 != "None":
+        params.append(f"LoRA 2 Model: {lora2}")
+        params.append(f"LoRA 2 Weight: {lora2_weight}")
+
+    description = prompt + "\n" + ", ".join(params)
+    description_escaped = _xml_escape(description)
+
+    # JSON UserComment payload (simplified Draw Things config)
+    user_comment = {
+        "c": prompt,
+        "model": model,
+        "sampler": sampler_name,
+        "steps": steps,
+        "scale": cfg_scale,
+        "seed": seed,
+        "seed_mode": seed_mode,
+        "shift": shift,
+        "size": size,
+        "strength": strength,
+        "width": width,
+        "height": height,
+        "uc": negative_prompt if negative_prompt else "",
+        "clip_skip": clip_skip,
+    }
+
+    loras = []
+    if lora1 and lora1 != "None":
+        loras.append({"file": lora1, "weight": lora1_weight})
+    if lora2 and lora2 != "None":
+        loras.append({"file": lora2, "weight": lora2_weight})
+    if loras:
+        user_comment["loras"] = loras
+
+    user_comment_json = json.dumps(user_comment, ensure_ascii=False, separators=(",", ":"))
+    user_comment_escaped = _xml_escape(user_comment_json)
+
+    xmp = f"""<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="XMP Core 6.0.0">
+   <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+      <rdf:Description rdf:about=""
+            xmlns:dc="http://purl.org/dc/elements/1.1/"
+            xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+            xmlns:exif="http://ns.adobe.com/exif/1.0/">
+         <dc:description>
+            <rdf:Alt>
+               <rdf:li xml:lang="x-default">{description_escaped}</rdf:li>
+            </rdf:Alt>
+         </dc:description>
+         <xmp:CreatorTool>MuddleMeThis</xmp:CreatorTool>
+         <exif:UserComment>
+            <rdf:Alt>
+               <rdf:li xml:lang="x-default">{user_comment_escaped}</rdf:li>
+            </rdf:Alt>
+         </exif:UserComment>
+      </rdf:Description>
+   </rdf:RDF>
+</x:xmpmeta>"""
+    return xmp
+
+
+def jsonify_prompt_for_ideogram(prompt: str, aspect_ratio_label: str) -> str:
+    """Convert a natural language prompt into Ideogram 4's structured JSON format.
+
+    Args:
+        prompt: The image generation prompt to convert
+        aspect_ratio_label: Aspect ratio label from the Generate tab dropdown
+
+    Returns:
+        Minified JSON string ready for Ideogram 4, or an error message
+    """
+    if not state.text_processor:
+        return "❌ LLM not initialized. Configure in Settings tab first."
+
+    if not prompt.strip():
+        return "❌ Please enter a prompt first"
+
+    aspect_ratio = parse_aspect_ratio_label(aspect_ratio_label)
+    system_prompt = settings.load_system_prompt("ideogram_json")
+
+    if not system_prompt:
+        return "❌ Ideogram JSON system prompt not found: settings/ideogram_json.txt"
+
+    try:
+        user_input = f"Prompt: {prompt}\nTarget aspect ratio: {aspect_ratio}"
+
+        result = state.text_processor.generate(
+            prompt=user_input, system_prompt=system_prompt
+        )
+
+        if result and result.strip():
+            try:
+                valid_json = _extract_and_repair_json(result)
+                parsed = json.loads(valid_json)
+                minified = json.dumps(
+                    parsed, separators=(",", ":"), ensure_ascii=False
+                )
+                state.current_prompt = minified
+                return minified
+            except (ValueError, json.JSONDecodeError) as e:
+                print(f"Warning: LLM JSON parse failed ({e}), using fallback.")
+                # Fall through to deterministic fallback
+        else:
+            print("Warning: LLM returned empty JSON-ify response, using fallback.")
+
+        # Deterministic fallback: guaranteed valid Ideogram JSON
+        fallback_json = _build_fallback_ideogram_json(prompt, aspect_ratio)
+        state.current_prompt = fallback_json
+        return fallback_json
+
+    except Exception as e:
+        print(f"Warning: LLM JSON-ify raised exception ({e}), using fallback.")
+        fallback_json = _build_fallback_ideogram_json(prompt, aspect_ratio)
+        state.current_prompt = fallback_json
+        return fallback_json
 
 
 # ============================================================================
@@ -1194,6 +1493,7 @@ def generate_image(
             # Add metadata to image
             metadata = PngInfo()
             metadata.add_text("prompt", prompt)
+            metadata.add_text("comment", prompt)
             metadata.add_text(
                 "negative_prompt", negative_prompt if negative_prompt else ""
             )
@@ -1212,6 +1512,29 @@ def generate_image(
             metadata.add_text("clip_skip", str(clip_skip))
             metadata.add_text("generation_time", f"{generation_time:.2f}s")
             metadata.add_text("created_with", "MuddleMeThis")
+
+            # Add Draw Things compatible XMP metadata
+            xmp_metadata = build_draw_things_xmp(
+                prompt=prompt,
+                negative_prompt=negative_prompt if negative_prompt else "",
+                model=model_file,
+                width=width,
+                height=height,
+                steps=steps,
+                sampler_name=sampler_name,
+                cfg_scale=cfg_scale,
+                seed=actual_seed,
+                shift=final_shift,
+                lora1=lora1,
+                lora1_weight=lora1_weight,
+                lora2=lora2,
+                lora2_weight=lora2_weight,
+                strength=1.0,
+                seed_mode=seed_mode,
+                clip_skip=clip_skip,
+            )
+            metadata.add_text("XML:com.adobe.xmp", xmp_metadata)
+            metadata.add_text("xmp", xmp_metadata)
 
             # Save with metadata and better filename
             # Create output directory if it doesn't exist
@@ -1475,7 +1798,27 @@ def edit_image(
 
             metadata = PngInfo()
             metadata.add_text("prompt", instruction)
+            metadata.add_text("comment", instruction)
             metadata.add_text("strength", str(strength))
+
+            # Add Draw Things compatible XMP metadata for edits
+            edit_xmp = build_draw_things_xmp(
+                prompt=instruction,
+                negative_prompt="",
+                model=model,
+                width=width,
+                height=height,
+                steps=steps,
+                sampler_name=sampler_name,
+                cfg_scale=cfg_scale,
+                seed=actual_seed,
+                shift=final_shift,
+                strength=strength,
+                seed_mode=seed_mode,
+                clip_skip=clip_skip,
+            )
+            metadata.add_text("XML:com.adobe.xmp", edit_xmp)
+            metadata.add_text("xmp", edit_xmp)
             metadata.add_text("model", model)
             metadata.add_text("steps", str(steps))
             metadata.add_text("cfg_scale", str(cfg_scale))
@@ -2425,6 +2768,11 @@ def create_ui():
 
                 gen_btn = gr.Button("🎨 Generate Image", variant="primary", size="lg")
 
+                gr.Markdown(
+                    "<small>🧙 **JSON-ify for Ideogram 4**: restructures the prompt as Ideogram JSON, often helping avoid 'Image blocked by safety filter'.</small>"
+                )
+                jsonify_btn = gr.Button("🧙 JSON-ify for Ideogram 4", size="sm")
+
             with gr.Column(scale=3):
                 gen_image = gr.Image(label="Generated Image")
                 gen_status = gr.Textbox(label="Generation Status", lines=8)
@@ -2478,6 +2826,13 @@ def create_ui():
             fn=on_negative_prompt_preset_selected,
             inputs=[gen_negative_preset],
             outputs=[gen_negative],
+        )
+
+        # JSON-ify prompt for Ideogram 4
+        jsonify_btn.click(
+            fn=jsonify_prompt_for_ideogram,
+            inputs=[gen_prompt, gen_aspect],
+            outputs=gen_prompt,
         )
 
         # Connect outputs to generation
