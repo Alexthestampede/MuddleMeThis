@@ -23,6 +23,8 @@ Example usage:
 from drawthings_client import (
     DrawThingsClient,
     ImageGenerationConfig,
+    ReferenceImage,
+    GenerationResult,
     StreamingProgressHandler,
     quick_generate,
     SCHEDULER_MAP
@@ -33,6 +35,8 @@ __author__ = "Draw Things Community"
 __all__ = [
     "DrawThingsClient",
     "ImageGenerationConfig",
+    "ReferenceImage",
+    "GenerationResult",
     "StreamingProgressHandler",
     "quick_generate",
     "SCHEDULER_MAP"

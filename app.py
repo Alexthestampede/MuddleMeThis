@@ -52,7 +52,12 @@ try:
     import GenerationConfiguration
     import imageService_pb2
     import LoRA
-    from drawthings_client import DrawThingsClient, ImageGenerationConfig, LoRAConfig
+    from drawthings_client import (
+        DrawThingsClient,
+        ImageGenerationConfig,
+        LoRAConfig,
+        ReferenceImage,
+    )
     from model_metadata import ModelMetadata
     from tensor_decoder import tensor_to_pil
 
@@ -1573,6 +1578,134 @@ def generate_image(
         )
 
 
+def generate_video(
+    prompt: str,
+    model: str,
+    width: int,
+    height: int,
+    steps: int,
+    cfg_scale: float,
+    sampler_name: str,
+    seed: int,
+    negative_prompt: str,
+    num_frames: int,
+    fps: int,
+    start_image=None,
+    progress=gr.Progress(),
+):
+    """Generate a video using Draw Things gRPC with optional starting image.
+
+    Yields (frame_preview, status_message) tuples for Gradio streaming.
+    """
+    if not state.grpc_client:
+        yield None, "❌ gRPC not initialized. Configure in Settings tab first."
+        return
+
+    if not prompt:
+        yield None, "❌ No prompt provided"
+        return
+
+    if not model:
+        yield None, "❌ No model selected"
+        return
+
+    model_file = state.model_name_to_file.get(model, model)
+
+    try:
+        # Use the new ImageGenerationConfig to leverage video fields
+        sampler_id = SAMPLERS.get(sampler_name, 0)
+        actual_seed = seed if seed is not None and seed != -1 else random_module.randint(0, 2**32 - 1)
+
+        config = ImageGenerationConfig(
+            model=model_file,
+            steps=steps,
+            width=width,
+            height=height,
+            cfg_scale=cfg_scale,
+            scheduler=sampler_name,
+            seed=actual_seed,
+            seed_mode=2,
+            clip_skip=1,
+            shift=1.0,
+            batch_count=1,
+            batch_size=1,
+            num_frames=num_frames,
+            fps_id=fps,
+            motion_bucket_id=127,
+            compression_artifacts=0,
+        )
+
+        status = (
+            f"🎬 Generating video...\n"
+            f"Prompt: {prompt[:80]}...\n"
+            f"Model: {model}\n"
+            f"Size: {width}x{height}, Frames: {num_frames}, FPS: {fps}\n"
+            f"Seed: {actual_seed}"
+        )
+        yield None, status
+
+        reference_images = None
+        if start_image is not None:
+            try:
+                img = Image.fromarray(start_image).convert("RGB")
+                img = img.resize((width, height), Image.Resampling.LANCZOS)
+                reference_images = [ReferenceImage(image=img, weight=1.0, hint_type="shuffle")]
+                status += "\n📎 Using starting image as reference"
+                yield None, status
+            except Exception as e:
+                print(f"Warning: Could not process starting image: {e}")
+
+        result = state.grpc_client.generate_media(
+            prompt=prompt,
+            config=config,
+            negative_prompt=negative_prompt,
+            input_image=None,
+            reference_images=reference_images,
+            progress_callback=lambda stage, step: progress(step / max(steps, 1), desc=stage),
+        )
+
+        if not result.images:
+            yield None, status + "\n❌ No video frames generated"
+            return
+
+        # Save frames and assemble video
+        output_dir = Path("outputs")
+        output_dir.mkdir(exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        prompt_short = "_".join(prompt.split()[:3]).replace("/", "-")[:30]
+        video_path = output_dir / f"{timestamp}_{model.replace(' ', '_')}_{prompt_short}_s{actual_seed}.mp4"
+
+        # Combine audio chunks if any
+        audio_bytes = b"".join(result.audio) if result.audio else None
+
+        saved_video = state.grpc_client.save_video(
+            frames=result.images,
+            output_path=str(video_path),
+            fps=fps,
+            audio=audio_bytes,
+            audio_sample_rate=44100,
+        )
+
+        final_status = (
+            status
+            + f"\n✅ Video complete!\n"
+            f"💾 Saved: {video_path.name}\n"
+            f"🎞️  Frames: {len(result.images)}"
+        )
+        if audio_bytes:
+            final_status += "\n🔊 Audio included"
+
+        # Return first frame as preview
+        preview_image = tensor_to_pil(result.images[0]) if result.images else None
+        yield preview_image, final_status
+
+    except Exception as e:
+        import traceback
+
+        error_details = traceback.format_exc()
+        yield None, f"❌ Error during video generation:\n{str(e)}\n\nDetails:\n{error_details}"
+
+
 def edit_image(
     input_image,
     instruction: str,
@@ -2366,7 +2499,84 @@ def create_ui():
                         edit_status = gr.Textbox(label="Status", lines=12)
 
             # ==================================================================
-            # TAB 7: Settings
+            # TAB 7: Video Generation
+            # ==================================================================
+            with gr.Tab("🎬 Video"):
+                gr.Markdown("### Generate a video from a prompt")
+                gr.Markdown(
+                    "*Requires a video-capable Draw Things model (e.g., LTX 2.3). Optional starting image for first-frame conditioning.*"
+                )
+
+                with gr.Row():
+                    with gr.Column(scale=2):
+                        video_start_image = gr.Image(
+                            label="Starting Image (optional)",
+                            type="numpy",
+                            sources=["upload", "clipboard"],
+                        )
+                        video_prompt = gr.Textbox(
+                            label="Video Prompt",
+                            placeholder="Describe the video you want to generate",
+                            lines=4,
+                        )
+                        video_negative = gr.Textbox(
+                            label="Negative Prompt",
+                            value="blurry, distorted, low quality",
+                            lines=2,
+                        )
+
+                        with gr.Row():
+                            video_width = gr.Number(
+                                label="Width", value=512, precision=0, step=64
+                            )
+                            video_height = gr.Number(
+                                label="Height", value=512, precision=0, step=64
+                            )
+
+                        with gr.Row():
+                            video_steps = gr.Slider(
+                                1, 100, 16, step=1, label="Steps"
+                            )
+                            video_cfg = gr.Slider(
+                                0.0, 20.0, 1.0, step=0.1, label="CFG Scale"
+                            )
+
+                        video_sampler = gr.Dropdown(
+                            choices=SAMPLER_NAMES,
+                            value=SAMPLER_DEFAULT,
+                            label="Sampler",
+                        )
+
+                        with gr.Row():
+                            video_frames = gr.Slider(
+                                1, 64, 14, step=1, label="Frames"
+                            )
+                            video_fps = gr.Slider(
+                                1, 60, 24, step=1, label="FPS"
+                            )
+                            video_seed = gr.Number(
+                                label="Seed (-1 = random)", value=-1, precision=0
+                            )
+
+                        video_model = gr.Dropdown(
+                            label="Model",
+                            choices=[],
+                            value="",
+                            interactive=True,
+                            allow_custom_value=True,
+                            info="Select a video model from the Draw Things server",
+                        )
+
+                        video_btn = gr.Button(
+                            "🎬 Generate Video", variant="primary", size="lg"
+                        )
+
+                    with gr.Column(scale=3):
+                        video_preview = gr.Image(label="First Frame Preview")
+                        video_status = gr.Textbox(label="Status", lines=12)
+
+            # ==================================================================
+            # TAB 8: Settings
             # ==================================================================
             with gr.Tab("⚙️ Settings"):
                 gr.Markdown("### Configuration")
@@ -2992,6 +3202,26 @@ def create_ui():
                 loras_dropdown,
             )
 
+        # Wire video generation button
+        video_btn.click(
+            fn=generate_video,
+            inputs=[
+                video_prompt,
+                video_model,
+                video_width,
+                video_height,
+                video_steps,
+                video_cfg,
+                video_sampler,
+                video_seed,
+                video_negative,
+                video_frames,
+                video_fps,
+                video_start_image,
+            ],
+            outputs=[video_preview, video_status],
+        )
+
         grpc_connect_btn.click(
             fn=init_grpc_all,
             inputs=[grpc_server],
@@ -3005,6 +3235,7 @@ def create_ui():
                 edit_model,
                 edit_lora1,
                 edit_lora2,
+                video_model,
             ],
         )
 

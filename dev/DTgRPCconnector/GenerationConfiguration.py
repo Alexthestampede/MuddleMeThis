@@ -721,3 +721,23 @@ def GenerationConfigurationAddCfgZeroInitSteps(builder, cfgZeroInitSteps):
 
 def AddCfgZeroInitSteps(builder, cfgZeroInitSteps):
     GenerationConfigurationAddCfgZeroInitSteps(builder, cfgZeroInitSteps)
+
+# --- Slot 84: compression_artifacts (CompressionMethod byte, default Disabled) ---
+# CompressionMethod enum: Disabled=0, H264=1, H265=2, Jpeg=3
+COMPRESSION_METHOD_DISABLED = 0
+COMPRESSION_METHOD_H264 = 1
+COMPRESSION_METHOD_H265 = 2
+COMPRESSION_METHOD_JPEG = 3
+
+def GenerationConfigurationAddCompressionArtifacts(builder, compressionArtifacts):
+    builder.PrependUint8Slot(84, compressionArtifacts, 0)
+
+def AddCompressionArtifacts(builder, compressionArtifacts):
+    GenerationConfigurationAddCompressionArtifacts(builder, compressionArtifacts)
+
+# --- Slot 85: compression_artifacts_quality (float, default 43.1) ---
+def GenerationConfigurationAddCompressionArtifactsQuality(builder, compressionArtifactsQuality):
+    builder.PrependFloat32Slot(85, compressionArtifactsQuality, 43.1)
+
+def AddCompressionArtifactsQuality(builder, compressionArtifactsQuality):
+    GenerationConfigurationAddCompressionArtifactsQuality(builder, compressionArtifactsQuality)

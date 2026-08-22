@@ -2,8 +2,9 @@
 
 # namespace:
 
+
 class SamplerType(object):
-    __slots__ = ['_tab']
+    __slots__ = ["_tab"]
 
     # SamplerType
     DPMPP2MKarras = 0
@@ -25,3 +26,4 @@ class SamplerType(object):
     DDIMTrailing = 16
     UniPCTrailing = 17
     UniPCAYS = 18
+    TCDTrailing = 19

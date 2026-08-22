@@ -32,6 +32,7 @@ import flatbuffers
 import random
 import hashlib
 import tempfile
+import subprocess
 from pathlib import Path
 from typing import Optional, Callable, List
 from dataclasses import dataclass, field
@@ -51,25 +52,34 @@ import Control as ControlFB
 
 # Scheduler name to SamplerType enum mapping
 SCHEDULER_MAP = {
-    "DPMPP2M Karras": SamplerType.SamplerType.DPMPP2MKarras,
+    "DPM++ 2M Karras": SamplerType.SamplerType.DPMPP2MKarras,
     "Euler A": SamplerType.SamplerType.EulerA,
     "DDIM": SamplerType.SamplerType.DDIM,
     "PLMS": SamplerType.SamplerType.PLMS,
-    "DPMPP SDE Karras": SamplerType.SamplerType.DPMPPSDEKarras,
+    "DPM++ SDE Karras": SamplerType.SamplerType.DPMPPSDEKarras,
     "UniPC": SamplerType.SamplerType.UniPC,
     "LCM": SamplerType.SamplerType.LCM,
     "Euler A Substep": SamplerType.SamplerType.EulerASubstep,
-    "DPMPP SDE Substep": SamplerType.SamplerType.DPMPPSDESubstep,
+    "DPM++ SDE Substep": SamplerType.SamplerType.DPMPPSDESubstep,
     "TCD": SamplerType.SamplerType.TCD,
     "Euler A Trailing": SamplerType.SamplerType.EulerATrailing,
-    "DPMPP SDE Trailing": SamplerType.SamplerType.DPMPPSDETrailing,
-    "DPMPP2M AYS": SamplerType.SamplerType.DPMPP2MAYS,
+    "DPM++ SDE Trailing": SamplerType.SamplerType.DPMPPSDETrailing,
+    "DPM++ 2M AYS": SamplerType.SamplerType.DPMPP2MAYS,
     "Euler A AYS": SamplerType.SamplerType.EulerAAYS,
-    "DPMPP SDE AYS": SamplerType.SamplerType.DPMPPSDEAYS,
-    "DPMPP2M Trailing": SamplerType.SamplerType.DPMPP2MTrailing,
+    "DPM++ SDE AYS": SamplerType.SamplerType.DPMPPSDEAYS,
+    "DPM++ 2M Trailing": SamplerType.SamplerType.DPMPP2MTrailing,
     "DDIM Trailing": SamplerType.SamplerType.DDIMTrailing,
     "UniPC Trailing": SamplerType.SamplerType.UniPCTrailing,
     "UniPC AYS": SamplerType.SamplerType.UniPCAYS,
+    "TCD Trailing": SamplerType.SamplerType.TCDTrailing,
+    # Legacy aliases (no spaces)
+    "DPMPP2M Karras": SamplerType.SamplerType.DPMPP2MKarras,
+    "DPMPP SDE Karras": SamplerType.SamplerType.DPMPPSDEKarras,
+    "DPMPP SDE Substep": SamplerType.SamplerType.DPMPPSDESubstep,
+    "DPMPP SDE Trailing": SamplerType.SamplerType.DPMPPSDETrailing,
+    "DPMPP2M AYS": SamplerType.SamplerType.DPMPP2MAYS,
+    "DPMPP SDE AYS": SamplerType.SamplerType.DPMPPSDEAYS,
+    "DPMPP2M Trailing": SamplerType.SamplerType.DPMPP2MTrailing,
     # Common aliases
     "UniPC ays": SamplerType.SamplerType.UniPCAYS,
     "unipc ays": SamplerType.SamplerType.UniPCAYS,
@@ -85,6 +95,7 @@ class LoRAConfig:
         weight: LoRA weight (default 0.6)
         mode: 0=All, 1=Base, 2=Refiner
     """
+
     file: str
     weight: float = 0.6
     mode: int = 0  # LoRAMode: All=0, Base=1, Refiner=2
@@ -106,6 +117,7 @@ class ControlNetConfig:
         target_blocks: Target blocks for IP-Adapter etc.
         input_override: Override input type (ControlInputType enum value)
     """
+
     file: str = ""
     weight: float = 1.0
     guidance_start: float = 0.0
@@ -116,6 +128,32 @@ class ControlNetConfig:
     control_mode: int = 0  # ControlMode.Balanced
     target_blocks: Optional[List[str]] = None
     input_override: int = 0  # ControlInputType.Unspecified
+
+
+@dataclass
+class ReferenceImage:
+    """Configuration for a reference/moodboard image.
+
+    Used with edit/kontext models and IP-Adapter to provide visual references.
+    The model can see and use the content of these images in generation.
+
+    Attributes:
+        image: Image input (PIL Image, file path, or bytes)
+        weight: Influence weight (0.0-1.0, default 1.0)
+        hint_type: Type of reference ("shuffle" for edit models, "ipadapterplus" for IP-Adapter)
+    """
+
+    image: any  # PIL Image, path str, or bytes
+    weight: float = 1.0
+    hint_type: str = "shuffle"  # or "ipadapterplus", "ipadapterfull", etc.
+
+
+@dataclass
+class GenerationResult:
+    """Result container for media generation (images / video frames + audio)."""
+
+    images: List[bytes]
+    audio: List[bytes]
 
 
 @dataclass
@@ -202,6 +240,7 @@ class ImageGenerationConfig:
         loras: List of LoRA configurations
         controls: List of ControlNet configurations
     """
+
     model: str
     steps: int
     width: int
@@ -286,12 +325,14 @@ class ImageGenerationConfig:
     stage_2_steps: int = 10
     stage_2_cfg: float = 1.0
     stage_2_shift: float = 1.0
-    # Video generation (SVD)
+    # Video generation (SVD / LTX)
     fps_id: int = 5
     motion_bucket_id: int = 127
     cond_aug: float = 0.02
     start_frame_cfg: float = 1.0
     num_frames: int = 14
+    compression_artifacts: int = 0  # CompressionMethod: Disabled=0, H264=1, H265=2, Jpeg=3
+    compression_artifacts_quality: float = 43.1
     # LoRA and ControlNet
     loras: List[LoRAConfig] = field(default_factory=list)
     controls: List[ControlNetConfig] = field(default_factory=list)
@@ -308,11 +349,29 @@ class ImageGenerationConfig:
         # Create string offsets first (must be done before StartObject)
         model_offset = builder.CreateString(self.model)
         upscaler_offset = builder.CreateString(self.upscaler) if self.upscaler else None
-        face_restoration_offset = builder.CreateString(self.face_restoration) if self.face_restoration else None
-        refiner_model_offset = builder.CreateString(self.refiner_model) if self.refiner_model else None
-        clip_l_text_offset = builder.CreateString(self.clip_l_text) if self.separate_clip_l and self.clip_l_text else None
-        open_clip_g_text_offset = builder.CreateString(self.open_clip_g_text) if self.separate_open_clip_g and self.open_clip_g_text else None
-        t5_text_offset = builder.CreateString(self.t5_text) if self.separate_t5 and self.t5_text else None
+        face_restoration_offset = (
+            builder.CreateString(self.face_restoration)
+            if self.face_restoration
+            else None
+        )
+        refiner_model_offset = (
+            builder.CreateString(self.refiner_model) if self.refiner_model else None
+        )
+        clip_l_text_offset = (
+            builder.CreateString(self.clip_l_text)
+            if self.separate_clip_l and self.clip_l_text
+            else None
+        )
+        open_clip_g_text_offset = (
+            builder.CreateString(self.open_clip_g_text)
+            if self.separate_open_clip_g and self.open_clip_g_text
+            else None
+        )
+        t5_text_offset = (
+            builder.CreateString(self.t5_text)
+            if self.separate_t5 and self.t5_text
+            else None
+        )
 
         # Build LoRA vector
         lora_offsets = []
@@ -362,10 +421,7 @@ class ImageGenerationConfig:
         controls_offset = builder.EndVector()
 
         # Get sampler type
-        sampler_type = SCHEDULER_MAP.get(
-            self.scheduler,
-            SamplerType.SamplerType.UniPC
-        )
+        sampler_type = SCHEDULER_MAP.get(self.scheduler, SamplerType.SamplerType.UniPC)
 
         # Convert pixels to scale units (64px per unit)
         scale_width = self.width // 64
@@ -386,14 +442,22 @@ class ImageGenerationConfig:
         GenerationConfiguration.AddBatchSize(builder, self.batch_size)
         GenerationConfiguration.AddHiresFix(builder, self.hires_fix)
         if self.hires_fix and self.hires_fix_start_width > 0:
-            GenerationConfiguration.AddHiresFixStartWidth(builder, self.hires_fix_start_width)
+            GenerationConfiguration.AddHiresFixStartWidth(
+                builder, self.hires_fix_start_width
+            )
         if self.hires_fix and self.hires_fix_start_height > 0:
-            GenerationConfiguration.AddHiresFixStartHeight(builder, self.hires_fix_start_height)
+            GenerationConfiguration.AddHiresFixStartHeight(
+                builder, self.hires_fix_start_height
+            )
         if self.hires_fix:
-            GenerationConfiguration.AddHiresFixStrength(builder, self.hires_fix_strength)
+            GenerationConfiguration.AddHiresFixStrength(
+                builder, self.hires_fix_strength
+            )
         if upscaler_offset:
             GenerationConfiguration.AddUpscaler(builder, upscaler_offset)
-        GenerationConfiguration.AddImageGuidanceScale(builder, self.image_guidance_scale)
+        GenerationConfiguration.AddImageGuidanceScale(
+            builder, self.image_guidance_scale
+        )
         GenerationConfiguration.AddSeedMode(builder, self.seed_mode)
         GenerationConfiguration.AddClipSkip(builder, self.clip_skip)
         GenerationConfiguration.AddControls(builder, controls_offset)
@@ -402,25 +466,39 @@ class ImageGenerationConfig:
         if face_restoration_offset:
             GenerationConfiguration.AddFaceRestoration(builder, face_restoration_offset)
         GenerationConfiguration.AddClipWeight(builder, self.clip_weight)
-        GenerationConfiguration.AddNegativePromptForImagePrior(builder, self.negative_prompt_for_image_prior)
+        GenerationConfiguration.AddNegativePromptForImagePrior(
+            builder, self.negative_prompt_for_image_prior
+        )
         GenerationConfiguration.AddImagePriorSteps(builder, self.image_prior_steps)
         if refiner_model_offset:
             GenerationConfiguration.AddRefinerModel(builder, refiner_model_offset)
         # FIXED: height=slot29, width=slot30 (was swapped before)
         if self.original_image_height is not None:
-            GenerationConfiguration.AddOriginalImageHeight(builder, self.original_image_height)
+            GenerationConfiguration.AddOriginalImageHeight(
+                builder, self.original_image_height
+            )
         if self.original_image_width is not None:
-            GenerationConfiguration.AddOriginalImageWidth(builder, self.original_image_width)
+            GenerationConfiguration.AddOriginalImageWidth(
+                builder, self.original_image_width
+            )
         GenerationConfiguration.AddCropTop(builder, self.crop_top)
         GenerationConfiguration.AddCropLeft(builder, self.crop_left)
         # FIXED: height=slot33, width=slot34 (was swapped before)
         if self.target_image_height is not None:
-            GenerationConfiguration.AddTargetImageHeight(builder, self.target_image_height)
+            GenerationConfiguration.AddTargetImageHeight(
+                builder, self.target_image_height
+            )
         if self.target_image_width is not None:
-            GenerationConfiguration.AddTargetImageWidth(builder, self.target_image_width)
+            GenerationConfiguration.AddTargetImageWidth(
+                builder, self.target_image_width
+            )
         GenerationConfiguration.AddAestheticScore(builder, self.aesthetic_score)
-        GenerationConfiguration.AddNegativeAestheticScore(builder, self.negative_aesthetic_score)
-        GenerationConfiguration.AddZeroNegativePrompt(builder, self.zero_negative_prompt)
+        GenerationConfiguration.AddNegativeAestheticScore(
+            builder, self.negative_aesthetic_score
+        )
+        GenerationConfiguration.AddZeroNegativePrompt(
+            builder, self.zero_negative_prompt
+        )
         GenerationConfiguration.AddRefinerStart(builder, self.refiner_start)
         # Video generation
         GenerationConfiguration.AddFpsId(builder, self.fps_id)
@@ -439,17 +517,33 @@ class ImageGenerationConfig:
         # Tiled decoding
         GenerationConfiguration.AddTiledDecoding(builder, self.tiled_decoding)
         GenerationConfiguration.AddDecodingTileWidth(builder, self.decoding_tile_width)
-        GenerationConfiguration.AddDecodingTileHeight(builder, self.decoding_tile_height)
-        GenerationConfiguration.AddDecodingTileOverlap(builder, self.decoding_tile_overlap)
-        GenerationConfiguration.AddStochasticSamplingGamma(builder, self.stochastic_sampling_gamma)
-        GenerationConfiguration.AddPreserveOriginalAfterInpaint(builder, self.preserve_original_after_inpaint)
+        GenerationConfiguration.AddDecodingTileHeight(
+            builder, self.decoding_tile_height
+        )
+        GenerationConfiguration.AddDecodingTileOverlap(
+            builder, self.decoding_tile_overlap
+        )
+        GenerationConfiguration.AddStochasticSamplingGamma(
+            builder, self.stochastic_sampling_gamma
+        )
+        GenerationConfiguration.AddPreserveOriginalAfterInpaint(
+            builder, self.preserve_original_after_inpaint
+        )
         # Tiled diffusion
         GenerationConfiguration.AddTiledDiffusion(builder, self.tiled_diffusion)
-        GenerationConfiguration.AddDiffusionTileWidth(builder, self.diffusion_tile_width)
-        GenerationConfiguration.AddDiffusionTileHeight(builder, self.diffusion_tile_height)
-        GenerationConfiguration.AddDiffusionTileOverlap(builder, self.diffusion_tile_overlap)
+        GenerationConfiguration.AddDiffusionTileWidth(
+            builder, self.diffusion_tile_width
+        )
+        GenerationConfiguration.AddDiffusionTileHeight(
+            builder, self.diffusion_tile_height
+        )
+        GenerationConfiguration.AddDiffusionTileOverlap(
+            builder, self.diffusion_tile_overlap
+        )
         # Upscaler scale factor
-        GenerationConfiguration.AddUpscalerScaleFactor(builder, self.upscaler_scale_factor)
+        GenerationConfiguration.AddUpscalerScaleFactor(
+            builder, self.upscaler_scale_factor
+        )
         # Text encoders
         GenerationConfiguration.AddT5TextEncoder(builder, self.t5_text_encoder)
         GenerationConfiguration.AddSeparateClipL(builder, self.separate_clip_l)
@@ -459,9 +553,13 @@ class ImageGenerationConfig:
         if open_clip_g_text_offset:
             GenerationConfiguration.AddOpenClipGText(builder, open_clip_g_text_offset)
         # FLUX guidance
-        GenerationConfiguration.AddSpeedUpWithGuidanceEmbed(builder, self.speed_up_with_guidance_embed)
+        GenerationConfiguration.AddSpeedUpWithGuidanceEmbed(
+            builder, self.speed_up_with_guidance_embed
+        )
         GenerationConfiguration.AddGuidanceEmbed(builder, self.guidance_embed)
-        GenerationConfiguration.AddResolutionDependentShift(builder, self.resolution_dependent_shift)
+        GenerationConfiguration.AddResolutionDependentShift(
+            builder, self.resolution_dependent_shift
+        )
         # TeaCache
         GenerationConfiguration.AddTeaCacheStart(builder, self.tea_cache_start)
         GenerationConfiguration.AddTeaCacheEnd(builder, self.tea_cache_end)
@@ -470,14 +568,27 @@ class ImageGenerationConfig:
         GenerationConfiguration.AddSeparateT5(builder, self.separate_t5)
         if t5_text_offset:
             GenerationConfiguration.AddT5Text(builder, t5_text_offset)
-        GenerationConfiguration.AddTeaCacheMaxSkipSteps(builder, self.tea_cache_max_skip_steps)
+        GenerationConfiguration.AddTeaCacheMaxSkipSteps(
+            builder, self.tea_cache_max_skip_steps
+        )
         # Causal inference
-        GenerationConfiguration.AddCausalInferenceEnabled(builder, self.causal_inference_enabled)
+        GenerationConfiguration.AddCausalInferenceEnabled(
+            builder, self.causal_inference_enabled
+        )
         GenerationConfiguration.AddCausalInference(builder, self.causal_inference)
-        GenerationConfiguration.AddCausalInferencePad(builder, self.causal_inference_pad)
+        GenerationConfiguration.AddCausalInferencePad(
+            builder, self.causal_inference_pad
+        )
         # CFG zero
         GenerationConfiguration.AddCfgZeroStar(builder, self.cfg_zero_star)
         GenerationConfiguration.AddCfgZeroInitSteps(builder, self.cfg_zero_init_steps)
+        # Video compression artifacts (LTX, etc.)
+        GenerationConfiguration.AddCompressionArtifacts(
+            builder, self.compression_artifacts
+        )
+        GenerationConfiguration.AddCompressionArtifactsQuality(
+            builder, self.compression_artifacts_quality
+        )
 
         config = GenerationConfiguration.End(builder)
         builder.Finish(config)
@@ -487,9 +598,14 @@ class ImageGenerationConfig:
 class DrawThingsClient:
     """Client for Draw Things image generation server."""
 
-    def __init__(self, server_address: str, insecure: bool = True,
-                 verify_ssl: bool = False, enable_compression: bool = False,
-                 ssl_cert_path: Optional[str] = None):
+    def __init__(
+        self,
+        server_address: str,
+        insecure: bool = True,
+        verify_ssl: bool = False,
+        enable_compression: bool = False,
+        ssl_cert_path: Optional[str] = None,
+    ):
         """Initialize Draw Things client.
 
         Args:
@@ -502,21 +618,23 @@ class DrawThingsClient:
         self.server_address = server_address
 
         options = [
-            ('grpc.max_send_message_length', 256 * 1024 * 1024),
-            ('grpc.max_receive_message_length', 256 * 1024 * 1024),
-            ('grpc.keepalive_time_ms', 30000),
-            ('grpc.keepalive_timeout_ms', 10000),
-            ('grpc.keepalive_permit_without_calls', 1),
-            ('grpc.http2.max_pings_without_data', 0),
-            ('grpc.http2.min_time_between_pings_ms', 10000),
-            ('grpc.http2.min_ping_interval_without_data_ms', 5000),
+            ("grpc.max_send_message_length", 32 * 1024 * 1024),
+            ("grpc.max_receive_message_length", 32 * 1024 * 1024),
+            ("grpc.keepalive_time_ms", 30000),
+            ("grpc.keepalive_timeout_ms", 10000),
+            ("grpc.keepalive_permit_without_calls", 1),
+            ("grpc.http2.max_pings_without_data", 0),
+            ("grpc.http2.min_time_between_pings_ms", 10000),
+            ("grpc.http2.min_ping_interval_without_data_ms", 5000),
         ]
 
         if enable_compression:
-            options.extend([
-                ('grpc.default_compression_algorithm', grpc.Compression.Gzip),
-                ('grpc.default_compression_level', 2),
-            ])
+            options.extend(
+                [
+                    ("grpc.default_compression_algorithm", grpc.Compression.Gzip),
+                    ("grpc.default_compression_level", 2),
+                ]
+            )
 
         if insecure:
             self.channel = grpc.insecure_channel(server_address, options=options)
@@ -527,13 +645,13 @@ class DrawThingsClient:
                 root_certs = None
                 if ssl_cert_path:
                     try:
-                        with open(ssl_cert_path, 'rb') as f:
+                        with open(ssl_cert_path, "rb") as f:
                             root_certs = f.read()
                     except FileNotFoundError:
                         print(f"Warning: Certificate file not found: {ssl_cert_path}")
                 else:
                     try:
-                        with open('server_cert.pem', 'rb') as f:
+                        with open("server_cert.pem", "rb") as f:
                             root_certs = f.read()
                     except FileNotFoundError:
                         pass
@@ -541,13 +659,17 @@ class DrawThingsClient:
                 credentials = grpc.ssl_channel_credentials(
                     root_certificates=root_certs,
                     private_key=None,
-                    certificate_chain=None
+                    certificate_chain=None,
                 )
-                options.extend([
-                    ('grpc.ssl_target_name_override', 'localhost'),
-                ])
+                options.extend(
+                    [
+                        ("grpc.ssl_target_name_override", "localhost"),
+                    ]
+                )
 
-            self.channel = grpc.secure_channel(server_address, credentials, options=options)
+            self.channel = grpc.secure_channel(
+                server_address, credentials, options=options
+            )
 
         self.stub = imageService_pb2_grpc.ImageGenerationServiceStub(self.channel)
 
@@ -566,7 +688,9 @@ class DrawThingsClient:
         request = imageService_pb2.EchoRequest(name=name)
         return self.stub.Echo(request)
 
-    def _encode_image(self, image_input, target_width: int, target_height: int) -> bytes:
+    def _encode_image(
+        self, image_input, target_width: int, target_height: int
+    ) -> bytes:
         """Encode an image to Draw Things tensor format.
 
         Args:
@@ -589,14 +713,14 @@ class DrawThingsClient:
         else:
             raise TypeError(f"Unsupported image type: {type(image_input)}")
 
-        if pil_img.mode != 'RGB':
-            pil_img = pil_img.convert('RGB')
+        if pil_img.mode != "RGB":
+            pil_img = pil_img.convert("RGB")
 
         target_size = (target_width, target_height)
         if pil_img.size != target_size:
             pil_img = pil_img.resize(target_size, Image.Resampling.LANCZOS)
 
-        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
             tmp_path = tmp.name
             pil_img.save(tmp_path)
 
@@ -636,8 +760,8 @@ class DrawThingsClient:
             raise TypeError(f"Unsupported mask type: {type(mask_input)}")
 
         # Convert to grayscale
-        if pil_img.mode != 'L':
-            pil_img = pil_img.convert('L')
+        if pil_img.mode != "L":
+            pil_img = pil_img.convert("L")
 
         target_size = (target_width, target_height)
         if pil_img.size != target_size:
@@ -651,22 +775,22 @@ class DrawThingsClient:
         float_array = (img_array.astype(np.float32) / 127.5) - 1.0
         float_array = float_array.reshape(1, height, width, channels)
 
-        pixel_data = fpzip.compress(float_array, order='C')
+        pixel_data = fpzip.compress(float_array, order="C")
 
         # CCV tensor header (68 bytes)
         header = bytearray(68)
-        struct.pack_into('<I', header, 0, 1012247)   # [0] fpzip magic
-        struct.pack_into('<I', header, 4, 0x1)       # [1] CCV_TENSOR_CPU_MEMORY
-        struct.pack_into('<I', header, 8, 0x02)      # [2] CCV_TENSOR_FORMAT_NHWC
-        struct.pack_into('<I', header, 12, 0x10000)  # [3] CCV_32F (float32)
-        struct.pack_into('<I', header, 20, 1)        # [5] batch = 1
-        struct.pack_into('<I', header, 24, height)   # [6] height
-        struct.pack_into('<I', header, 28, width)    # [7] width
-        struct.pack_into('<I', header, 32, channels) # [8] channels
+        struct.pack_into("<I", header, 0, 1012247)  # [0] fpzip magic
+        struct.pack_into("<I", header, 4, 0x1)  # [1] CCV_TENSOR_CPU_MEMORY
+        struct.pack_into("<I", header, 8, 0x02)  # [2] CCV_TENSOR_FORMAT_NHWC
+        struct.pack_into("<I", header, 12, 0x10000)  # [3] CCV_32F (float32)
+        struct.pack_into("<I", header, 20, 1)  # [5] batch = 1
+        struct.pack_into("<I", header, 24, height)  # [6] height
+        struct.pack_into("<I", header, 28, width)  # [7] width
+        struct.pack_into("<I", header, 32, channels)  # [8] channels
 
         return bytes(header) + pixel_data
 
-    def generate_image(
+    def generate_media(
         self,
         prompt: str,
         config: ImageGenerationConfig,
@@ -675,27 +799,34 @@ class DrawThingsClient:
         input_image=None,
         mask_image=None,
         hints: Optional[List] = None,
+        reference_images: Optional[List] = None,
         metadata_override=None,
         progress_callback: Optional[Callable[[str, int], None]] = None,
-        preview_callback: Optional[Callable[[bytes], None]] = None
-    ) -> List[bytes]:
-        """Generate image(s) using the specified configuration.
+        preview_callback: Optional[Callable[[bytes], None]] = None,
+    ) -> GenerationResult:
+        """Generate media (images/video frames + optional audio) using the specified configuration.
+
+        This is the lower-level method that also captures generated audio for video models.
+        For image-only generation, use generate_image() which is a convenience wrapper.
 
         Args:
-            prompt: Text prompt for image generation
-            config: Image generation configuration
+            prompt: Text prompt for image/video generation
+            config: Image/video generation configuration
             negative_prompt: Negative prompt
-            scale_factor: Image scale factor
+            scale_factor: Image/video scale factor
             input_image: Input image for img2img/edit (PIL Image, path, or bytes)
             mask_image: Mask image for inpainting (PIL Image, path, or bytes).
                        White=inpaint area, black=preserve area.
             hints: List of HintProto objects for ControlNet hints
+            reference_images: List of ReferenceImage objects for moodboard/references
             metadata_override: MetadataOverride protobuf object (for LoRA metadata)
             progress_callback: Callback for progress (stage_name, step_number)
             preview_callback: Callback for preview images
 
         Returns:
-            List of generated image data as bytes
+            GenerationResult containing:
+            - images: List of generated image/video frame data as bytes
+            - audio: List of audio chunks (empty for image-only generation)
         """
         config_bytes = config.to_flatbuffer()
 
@@ -716,71 +847,121 @@ class DrawThingsClient:
             mask_hash = hashlib.sha256(mask_tensor).digest()
             contents.append(mask_tensor)
 
+        # Process reference images (moodboard)
+        reference_hints = []
+        if reference_images is not None:
+            for ref_img in reference_images:
+                if hasattr(ref_img, "image"):
+                    # It's a ReferenceImage dataclass
+                    ref_path = ref_img.image
+                    ref_weight = ref_img.weight
+                    ref_hint_type = ref_img.hint_type
+                elif isinstance(ref_img, (str, Image.Image)):
+                    # It's just an image path or PIL Image
+                    ref_path = ref_img
+                    ref_weight = 1.0
+                    ref_hint_type = "shuffle"  # default for edit models
+                elif isinstance(ref_img, dict):
+                    # Dict format
+                    ref_path = ref_img.get("image", ref_img.get("path"))
+                    ref_weight = ref_img.get("weight", 1.0)
+                    ref_hint_type = ref_img.get("hint_type", "shuffle")
+                else:
+                    continue
+
+                # Encode the reference image
+                ref_tensor = self._encode_image(ref_path, config.width, config.height)
+                ref_hash = hashlib.sha256(ref_tensor).digest()
+                contents.append(ref_tensor)
+
+                # Create HintProto for this reference
+                hint_proto = imageService_pb2.HintProto(
+                    hintType=ref_hint_type,
+                    tensors=[
+                        imageService_pb2.TensorAndWeight(
+                            tensor=ref_hash, weight=ref_weight
+                        )
+                    ],
+                )
+                reference_hints.append(hint_proto)
+
         # Build gRPC request
         request_kwargs = {
-            'prompt': prompt,
-            'negativePrompt': negative_prompt,
-            'configuration': config_bytes,
-            'scaleFactor': scale_factor,
-            'user': "DrawThingsPythonClient",
-            'device': imageService_pb2.LAPTOP,
-            'chunked': True,
+            "prompt": prompt,
+            "negativePrompt": negative_prompt,
+            "configuration": config_bytes,
+            "scaleFactor": scale_factor,
+            "user": "DrawThingsPythonClient",
+            "device": imageService_pb2.LAPTOP,
+            "chunked": True,
         }
 
         if image_hash is not None:
-            request_kwargs['image'] = image_hash
+            request_kwargs["image"] = image_hash
         if mask_hash is not None:
-            request_kwargs['mask'] = mask_hash
+            request_kwargs["mask"] = mask_hash
         if contents:
-            request_kwargs['contents'] = contents
-        if hints:
-            request_kwargs['hints'] = hints
+            request_kwargs["contents"] = contents
+
+        # Merge hints
+        all_hints = list(hints) if hints else []
+        all_hints.extend(reference_hints)
+        if all_hints:
+            request_kwargs["hints"] = all_hints
+
         if metadata_override is not None:
-            request_kwargs['override'] = metadata_override
+            request_kwargs["override"] = metadata_override
 
         request = imageService_pb2.ImageGenerationRequest(**request_kwargs)
 
         # Stream response
         generated_images = []
+        generated_audio = []
         image_chunks = []
 
         try:
             for response in self.stub.GenerateImage(request):
                 # Handle progress signposts
-                if response.HasField('currentSignpost'):
+                if response.HasField("currentSignpost"):
                     signpost = response.currentSignpost
 
-                    if signpost.HasField('sampling'):
+                    if signpost.HasField("sampling"):
                         if progress_callback:
                             progress_callback("Sampling", signpost.sampling.step)
-                    elif signpost.HasField('textEncoded'):
+                    elif signpost.HasField("textEncoded"):
                         if progress_callback:
                             progress_callback("Text Encoded", 0)
-                    elif signpost.HasField('imageEncoded'):
+                    elif signpost.HasField("imageEncoded"):
                         if progress_callback:
                             progress_callback("Image Encoded", 0)
-                    elif signpost.HasField('imageDecoded'):
+                    elif signpost.HasField("imageDecoded"):
                         if progress_callback:
                             progress_callback("Image Decoded", 0)
-                    elif signpost.HasField('secondPassSampling'):
+                    elif signpost.HasField("secondPassSampling"):
                         if progress_callback:
-                            progress_callback("Second Pass Sampling", signpost.secondPassSampling.step)
-                    elif signpost.HasField('secondPassImageEncoded'):
+                            progress_callback(
+                                "Second Pass Sampling", signpost.secondPassSampling.step
+                            )
+                    elif signpost.HasField("secondPassImageEncoded"):
                         if progress_callback:
                             progress_callback("Second Pass Image Encoded", 0)
-                    elif signpost.HasField('secondPassImageDecoded'):
+                    elif signpost.HasField("secondPassImageDecoded"):
                         if progress_callback:
                             progress_callback("Second Pass Image Decoded", 0)
-                    elif signpost.HasField('faceRestored'):
+                    elif signpost.HasField("faceRestored"):
                         if progress_callback:
                             progress_callback("Face Restored", 0)
-                    elif signpost.HasField('imageUpscaled'):
+                    elif signpost.HasField("imageUpscaled"):
                         if progress_callback:
                             progress_callback("Image Upscaled", 0)
 
                 # Handle preview images
-                if response.HasField('previewImage') and preview_callback:
+                if response.HasField("previewImage") and preview_callback:
                     preview_callback(response.previewImage)
+
+                # Collect generated audio (e.g. LTX video models)
+                if response.generatedAudio:
+                    generated_audio.extend(response.generatedAudio)
 
                 # Handle chunked responses
                 if response.generatedImages:
@@ -789,7 +970,7 @@ class DrawThingsClient:
 
                     if response.chunkState == imageService_pb2.LAST_CHUNK:
                         if len(image_chunks) > 1:
-                            combined = b''.join(image_chunks)
+                            combined = b"".join(image_chunks)
                             generated_images.append(combined)
                         elif len(image_chunks) == 1:
                             generated_images.append(image_chunks[0])
@@ -798,7 +979,58 @@ class DrawThingsClient:
         except grpc.RpcError as e:
             raise Exception(f"gRPC error: {e.code()}: {e.details()}")
 
-        return generated_images
+        return GenerationResult(images=generated_images, audio=generated_audio)
+
+    def generate_image(
+        self,
+        prompt: str,
+        config: ImageGenerationConfig,
+        negative_prompt: str = "",
+        scale_factor: int = 1,
+        input_image=None,
+        mask_image=None,
+        hints: Optional[List] = None,
+        reference_images: Optional[List] = None,
+        metadata_override=None,
+        progress_callback: Optional[Callable[[str, int], None]] = None,
+        preview_callback: Optional[Callable[[bytes], None]] = None,
+    ) -> List[bytes]:
+        """Generate image(s) using the specified configuration.
+
+        Convenience wrapper around generate_media() that discards any generated audio
+        and returns only image bytes. Use generate_media() directly for video/audio support.
+
+        Args:
+            prompt: Text prompt for image generation
+            config: Image generation configuration
+            negative_prompt: Negative prompt
+            scale_factor: Image scale factor
+            input_image: Input image for img2img/edit (PIL Image, path, or bytes)
+            mask_image: Mask image for inpainting (PIL Image, path, or bytes).
+                       White=inpaint area, black=preserve area.
+            hints: List of HintProto objects for ControlNet hints
+            reference_images: List of ReferenceImage objects for moodboard/references
+            metadata_override: MetadataOverride protobuf object (for LoRA metadata)
+            progress_callback: Callback for progress (stage_name, step_number)
+            preview_callback: Callback for preview images
+
+        Returns:
+            List of generated image data as bytes
+        """
+        result = self.generate_media(
+            prompt=prompt,
+            config=config,
+            negative_prompt=negative_prompt,
+            scale_factor=scale_factor,
+            input_image=input_image,
+            mask_image=mask_image,
+            hints=hints,
+            reference_images=reference_images,
+            metadata_override=metadata_override,
+            progress_callback=progress_callback,
+            preview_callback=preview_callback,
+        )
+        return result.images
 
     def files_exist(self, files: List[str]) -> dict:
         """Check if files exist on the server.
@@ -817,10 +1049,7 @@ class DrawThingsClient:
         return result
 
     def save_images(
-        self,
-        images: List[bytes],
-        output_dir: str = ".",
-        prefix: str = "generated"
+        self, images: List[bytes], output_dir: str = ".", prefix: str = "generated"
     ) -> List[str]:
         """Save generated images to disk.
 
@@ -837,15 +1066,96 @@ class DrawThingsClient:
 
         saved_files = []
         for i, image_data in enumerate(images):
-            filename = f"{prefix}_{i+1}.png"
+            filename = f"{prefix}_{i + 1}.png"
             filepath = output_path / filename
 
-            with open(filepath, 'wb') as f:
+            with open(filepath, "wb") as f:
                 f.write(image_data)
 
             saved_files.append(str(filepath))
 
         return saved_files
+
+    def save_video(
+        self,
+        frames: List[bytes],
+        output_path: str,
+        fps: int = 24,
+        audio: Optional[bytes] = None,
+        audio_sample_rate: int = 44100,
+    ) -> str:
+        """Assemble decoded video frames into a playable video file.
+
+        Uses imageio for frame muxing and FFmpeg (via imageio-ffmpeg) for audio muxing.
+        Falls back to frame-only output if imageio is unavailable.
+
+        Args:
+            frames: List of decoded frame bytes (PNG or tensor chunks decoded by client)
+            output_path: Path for output video file (e.g. "output.mp4")
+            fps: Frames per second
+            audio: Optional raw audio bytes (stereo, typically from LTX 2.3)
+            audio_sample_rate: Sample rate of the provided audio bytes
+
+        Returns:
+            Path to the saved video file
+        """
+        output = Path(output_path)
+        output.parent.mkdir(parents=True, exist_ok=True)
+
+        # Try imageio first
+        try:
+            import imageio
+
+            # Write frames-only video
+            writer = imageio.get_writer(output_path, fps=fps, codec="libx264")
+            for frame_bytes in frames:
+                frame = imageio.imread(frame_bytes)
+                writer.append_data(frame)
+            writer.close()
+
+            # If audio is provided, try to mux it in
+            if audio:
+                try:
+                    import imageio_ffmpeg
+
+                    temp_video = output.with_suffix(".temp" + output.suffix)
+                    output.rename(temp_video)
+
+                    ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+                    cmd = [
+                        ffmpeg_path,
+                        "-y",
+                        "-i",
+                        str(temp_video),
+                        "-f",
+                        "f32le",
+                        "-ar",
+                        str(audio_sample_rate),
+                        "-ac",
+                        "2",
+                        "-i",
+                        "-",
+                        "-c:v",
+                        "copy",
+                        "-c:a",
+                        "aac",
+                        "-shortest",
+                        str(output),
+                    ]
+                    subprocess.run(cmd, input=audio, check=True)
+                    temp_video.unlink(missing_ok=True)
+                except Exception as e:
+                    print(f"Warning: Could not mux audio: {e}")
+                    # Keep frames-only video
+                    if not output.exists() and temp_video.exists():
+                        temp_video.rename(output)
+
+            return str(output)
+        except ImportError:
+            raise ImportError(
+                "Video assembly requires imageio and imageio-ffmpeg. "
+                "Install: pip install imageio imageio-ffmpeg"
+            )
 
 
 class StreamingProgressHandler:
@@ -862,7 +1172,11 @@ class StreamingProgressHandler:
 
         if stage == "Sampling":
             percent = (step / self.total_steps) * 100
-            print(f"\r{stage}: {step}/{self.total_steps} ({percent:.1f}%)", end="", flush=True)
+            print(
+                f"\r{stage}: {step}/{self.total_steps} ({percent:.1f}%)",
+                end="",
+                flush=True,
+            )
         elif stage == "Second Pass Sampling":
             print(f"\r{stage}: step {step}", end="", flush=True)
         else:
@@ -882,7 +1196,7 @@ def quick_generate(
     cfg_scale: float = 5.0,
     scheduler: str = "UniPC ays",
     output_path: str = "output.png",
-    show_progress: bool = True
+    show_progress: bool = True,
 ) -> str:
     """Quick convenience function to generate a single image."""
     config = ImageGenerationConfig(
@@ -891,7 +1205,7 @@ def quick_generate(
         width=width,
         height=height,
         cfg_scale=cfg_scale,
-        scheduler=scheduler
+        scheduler=scheduler,
     )
 
     progress_handler = StreamingProgressHandler(steps) if show_progress else None
@@ -900,7 +1214,9 @@ def quick_generate(
         images = client.generate_image(
             prompt=prompt,
             config=config,
-            progress_callback=progress_handler.on_progress if progress_handler else None
+            progress_callback=progress_handler.on_progress
+            if progress_handler
+            else None,
         )
 
         if progress_handler:
@@ -910,7 +1226,7 @@ def quick_generate(
             output_dir = Path(output_path).parent
             output_dir.mkdir(parents=True, exist_ok=True)
 
-            with open(output_path, 'wb') as f:
+            with open(output_path, "wb") as f:
                 f.write(images[0])
 
             return output_path
@@ -924,5 +1240,9 @@ if __name__ == "__main__":
     print("\nExample:")
     print("  from drawthings_client import DrawThingsClient, ImageGenerationConfig")
     print("  client = DrawThingsClient('192.168.2.150:7859')")
-    print("  config = ImageGenerationConfig(model='realDream', steps=16, width=512, height=512, cfg_scale=5.0, scheduler='UniPC ays')")
-    print("  images = client.generate_image(prompt='A beautiful sunset', config=config)")
+    print(
+        "  config = ImageGenerationConfig(model='realDream', steps=16, width=512, height=512, cfg_scale=5.0, scheduler='UniPC ays')"
+    )
+    print(
+        "  images = client.generate_image(prompt='A beautiful sunset', config=config)"
+    )
