@@ -735,22 +735,37 @@ def init_grpc(server_url: str) -> Tuple[str, gr.Dropdown, gr.Dropdown]:
         # Update settings
         settings.update_config(grpc_server=server_url)
 
-        # Use Draw Things root CA certificate for SSL validation
-        # This allows connection to self-hosted servers with self-signed certificates
-        root_ca_path = Path(__file__).parent / "dev" / "DTgRPCconnector" / "root_ca.crt"
+        # The updated DTgRPCconnector forces grpc.ssl_target_name_override to
+        # "localhost" whenever TLS is used with verify_ssl=False, which breaks
+        # connections to non-localhost addresses (e.g., 192.168.2.150). Draw
+        # Things local/self-hosted servers are normally reached over plain
+        # insecure gRPC, so default to insecure=True.
+        is_localhost = any(
+            h in server_url.lower()
+            for h in ["localhost", "127.0.0.1", "::1"]
+        )
 
-        if root_ca_path.exists():
-            # Use SSL with the root CA certificate
-            state.grpc_client = DrawThingsClient(
-                server_address=server_url,
-                insecure=False,
-                verify_ssl=False,
-                ssl_cert_path=str(root_ca_path),
+        if is_localhost:
+            # Use SSL with the Draw Things root CA certificate for localhost
+            root_ca_path = (
+                Path(__file__).parent / "dev" / "DTgRPCconnector" / "root_ca.crt"
             )
+            if root_ca_path.exists():
+                state.grpc_client = DrawThingsClient(
+                    server_address=server_url,
+                    insecure=False,
+                    verify_ssl=False,
+                    ssl_cert_path=str(root_ca_path),
+                )
+            else:
+                print(f"Warning: Root CA certificate not found at {root_ca_path}")
+                print("Attempting insecure connection...")
+                state.grpc_client = DrawThingsClient(
+                    server_address=server_url, insecure=True
+                )
         else:
-            # Fallback to insecure connection
-            print(f"Warning: Root CA certificate not found at {root_ca_path}")
-            print("Attempting insecure connection...")
+            # Non-localhost: insecure channel avoids the hardcoded localhost
+            # SSL override in the updated DTgRPCconnector.
             state.grpc_client = DrawThingsClient(
                 server_address=server_url, insecure=True
             )
@@ -2549,7 +2564,7 @@ def create_ui():
 
                         with gr.Row():
                             video_frames = gr.Slider(
-                                1, 64, 14, step=1, label="Frames"
+                                1, 257, 14, step=1, label="Frames"
                             )
                             video_fps = gr.Slider(
                                 1, 60, 24, step=1, label="FPS"
