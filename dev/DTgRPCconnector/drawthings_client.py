@@ -1203,9 +1203,9 @@ class DrawThingsClient:
         if wav_samples is not None:
             candidates.append((wav_rate, wav_channels, wav_samples, "wav"))
 
-        # Try raw formats. s16le is tried first because many video models (LTX, etc.)
-        # return raw 16-bit PCM rather than float32.
-        for fmt, channels in [("s16le", 2), ("s16le", 1), ("f32le", 2), ("f32le", 1)]:
+        # Try raw formats. The caller should have already decoded any CCV tensor
+        # wrapper; at this point we expect float32 PCM from decoded audio.
+        for fmt, channels in [("f32le", 2), ("f32le", 1), ("s16le", 2), ("s16le", 1)]:
             samples = _decode_raw(audio, fmt)
             if samples is not None:
                 candidates.append((audio_sample_rate, channels, samples, fmt))

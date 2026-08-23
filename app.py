@@ -1692,6 +1692,34 @@ def generate_image(
         )
 
 
+def _decode_audio_blob(data: bytes) -> bytes:
+    """Decode one audio chunk into contiguous bytes.
+
+    Video-model audio responses use the same CCV tensor wrapper as frames:
+    a 68-byte header followed by fpzip-compressed float32. If the blob has
+    that header, return the decompressed float32 bytes; otherwise return the
+    bytes unchanged (already raw PCM).
+    """
+    import struct
+    import numpy as np
+
+    if len(data) < 68:
+        return data
+
+    header = struct.unpack_from("<32I", data, 0)
+    magic = header[0]
+    if magic != 1012247:  # MAGIC_COMPRESSED
+        return data
+
+    compressed = data[68:]
+    try:
+        import fpzip
+    except ImportError:
+        raise RuntimeError("Audio payload is fpzip-compressed but fpzip is not installed")
+    f32 = fpzip.decompress(compressed, order="C")
+    return f32.astype(np.float32).tobytes()
+
+
 def _save_video_from_tensors(
     frames: List[bytes],
     output_path: str,
@@ -1703,6 +1731,9 @@ def _save_video_from_tensors(
 
     imageio's imread cannot read raw tensor chunks, so we decode each frame
     with tensor_to_pil() and write numpy arrays via imageio.
+
+    Audio chunks arrive as separate CCV tensor blobs; decode each one and
+    concatenate the decompressed float32 PCM before sanitization.
     """
     import imageio
     import numpy as np
@@ -1907,8 +1938,32 @@ def generate_video(
         prompt_short = "_".join(prompt.split()[:3]).replace("/", "-")[:30]
         video_path = output_dir / f"{timestamp}_{model.replace(' ', '_')}_{prompt_short}_s{actual_seed}.mp4"
 
-        # Combine audio chunks if any
-        audio_bytes = b"".join(result.audio) if result.audio else None
+        if result.audio:
+            import struct as _struct
+            first = result.audio[0]
+            n = len(result.audio)
+            sizes = [len(c) for c in result.audio]
+            if len(first) >= 4:
+                magic = _struct.unpack_from("<I", first, 0)[0]
+                status += (
+                    f"\n[AudioDebug] {n} chunk(s), sizes={sizes}, "
+                    f"magic={magic} "
+                    f"({'CCV tensor' if magic == 1012247 else 'raw/PCM'})"
+                )
+
+        # Decode audio chunks. LTX audio arrives as CCV tensor blobs with the
+        # same 68-byte header + fpzip payload as video frames. Decode each
+        # chunk first, then concatenate.
+        decoded_audio_chunks = []
+        for chunk in result.audio:
+            try:
+                decoded_audio_chunks.append(_decode_audio_blob(chunk))
+            except RuntimeError as e:
+                yield None, f"❌ Audio decode error: {e}"
+                return
+            except Exception as e:
+                print(f"Warning: skipping malformed audio chunk ({e})")
+        audio_bytes = b"".join(decoded_audio_chunks) if decoded_audio_chunks else None
 
         saved_video = _save_video_from_tensors(
             frames=result.images,
