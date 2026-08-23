@@ -22,6 +22,8 @@ from pathlib import Path
 from typing import Optional, Tuple, List
 from datetime import datetime
 
+import numpy as np
+
 # Application version
 APP_VERSION = "1.0.0"
 
@@ -1672,6 +1674,71 @@ def generate_image(
         )
 
 
+def _save_video_from_tensors(
+    frames: List[bytes],
+    output_path: str,
+    fps: int = 24,
+    audio: Optional[bytes] = None,
+    audio_sample_rate: int = 44100,
+) -> str:
+    """Assemble decoded Draw Things tensor frames into an MP4 video.
+
+    imageio's imread cannot read raw tensor chunks, so we decode each frame
+    with tensor_to_pil() and write numpy arrays via imageio.
+    """
+    import imageio
+    import numpy as np
+
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    writer = imageio.get_writer(output_path, fps=fps, codec="libx264")
+    for frame_bytes in frames:
+        pil_frame = tensor_to_pil(frame_bytes)
+        # Ensure RGB for consistent video encoding
+        if pil_frame.mode != "RGB":
+            pil_frame = pil_frame.convert("RGB")
+        writer.append_data(np.array(pil_frame))
+    writer.close()
+
+    if audio:
+        try:
+            import imageio_ffmpeg
+
+            temp_video = output.with_suffix(".temp" + output.suffix)
+            output.rename(temp_video)
+
+            ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+            cmd = [
+                ffmpeg_path,
+                "-y",
+                "-i",
+                str(temp_video),
+                "-f",
+                "f32le",
+                "-ar",
+                str(audio_sample_rate),
+                "-ac",
+                "2",
+                "-i",
+                "-",
+                "-c:v",
+                "copy",
+                "-c:a",
+                "aac",
+                "-shortest",
+                str(output),
+            ]
+            subprocess.run(cmd, input=audio, check=True)
+            temp_video.unlink(missing_ok=True)
+        except Exception as e:
+            print(f"Warning: Could not mux audio: {e}")
+            if not output.exists() and temp_video.exists():
+                temp_video.rename(output)
+
+    return str(output)
+
+
 def generate_video(
     prompt: str,
     model: str,
@@ -1773,7 +1840,7 @@ def generate_video(
         # Combine audio chunks if any
         audio_bytes = b"".join(result.audio) if result.audio else None
 
-        saved_video = state.grpc_client.save_video(
+        saved_video = _save_video_from_tensors(
             frames=result.images,
             output_path=str(video_path),
             fps=fps,
