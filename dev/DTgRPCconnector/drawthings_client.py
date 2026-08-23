@@ -1124,22 +1124,25 @@ class DrawThingsClient:
             audio_sample_rate = wav_rate
 
         if wav_format is None or wav_format == 3:  # PCM or IEEE float
-            # Interpret as float32 little-endian PCM
-            samples = np.frombuffer(audio, dtype=np.float32).copy()
+            # Interpret as float32 little-endian PCM; trim to a whole sample boundary
+            byte_len = (len(audio) // 4) * 4
+            samples = np.frombuffer(audio[:byte_len], dtype=np.float32).copy()
         elif wav_format == 1:  # integer PCM
             if wav_bits == 16:
-                samples = np.frombuffer(audio, dtype=np.int16).astype(np.float32) / 32768.0
+                byte_len = (len(audio) // 2) * 2
+                samples = np.frombuffer(audio[:byte_len], dtype=np.int16).astype(np.float32) / 32768.0
             elif wav_bits == 24:
                 # Pack 24-bit little-endian into int32
-                audio = audio[: (len(audio) // 3) * 3]
-                arr = np.frombuffer(audio, dtype=np.uint8).reshape(-1, 3)
+                byte_len = (len(audio) // 3) * 3
+                arr = np.frombuffer(audio[:byte_len], dtype=np.uint8).reshape(-1, 3)
                 ints = (arr[:, 0].astype(np.int32)
                         | (arr[:, 1].astype(np.int32) << 8)
                         | (arr[:, 2].astype(np.int32) << 16))
                 ints = np.where(ints >= 0x800000, ints - 0x1000000, ints)
                 samples = ints.astype(np.float32) / 8388608.0
             elif wav_bits == 32:
-                samples = np.frombuffer(audio, dtype=np.int32).astype(np.float32) / 2147483648.0
+                byte_len = (len(audio) // 4) * 4
+                samples = np.frombuffer(audio[:byte_len], dtype=np.int32).astype(np.float32) / 2147483648.0
             else:
                 return None, False
         else:
@@ -1148,11 +1151,19 @@ class DrawThingsClient:
         if samples.size == 0:
             return None, False
 
-        # Force stereo: if mono, duplicate; if more channels, truncate to first two
+        # Force stereo output
         if wav_channels == 1:
             samples = np.repeat(samples, 2)
         elif wav_channels >= 2:
-            samples = samples[: (samples.size // 2) * 2]
+            # Deinterleave and keep only the first two channels
+            n_frames = samples.size // wav_channels
+            if n_frames == 0:
+                # Not enough samples for the declared channel count; fall back to
+                # treating the buffer as mono and duplicate to stereo
+                samples = np.repeat(samples, 2)
+            else:
+                samples = samples[: n_frames * wav_channels].reshape(n_frames, wav_channels)
+                samples = samples[:, :2].reshape(-1)
 
         # Replace NaN/Inf and clamp to valid range
         had_invalid = not np.isfinite(samples).all()
