@@ -11,3 +11,7 @@ Pillow>=10.0.0
 
 # For potential future needs
 python-dotenv>=1.0.0
+
+# Video generation support (LTX 2.3 via DTgRPCconnector)
+imageio>=2.34.0
+imageio-ffmpeg>=0.4.9
