@@ -1805,6 +1805,10 @@ def generate_video(
 
     model_file = state.model_name_to_file.get(model, model)
 
+    # LTX video models have a fixed 25 fps output regardless of UI setting
+    is_ltx = "ltx" in model.lower() if model else False
+    actual_fps = 25 if is_ltx else fps
+
     try:
         # Use the new ImageGenerationConfig to leverage video fields
         sampler_id = SAMPLERS.get(sampler_name, 0)
@@ -1824,7 +1828,7 @@ def generate_video(
             batch_count=1,
             batch_size=1,
             num_frames=num_frames,
-            fps_id=fps,
+            fps_id=actual_fps,
             motion_bucket_id=127,
             compression_artifacts=0,
             hires_fix=hires_fix,
@@ -1837,7 +1841,7 @@ def generate_video(
             f"🎬 Generating video...\n"
             f"Prompt: {prompt[:80]}...\n"
             f"Model: {model}\n"
-            f"Size: {width}x{height}, Frames: {num_frames}, FPS: {fps}\n"
+            f"Size: {width}x{height}, Frames: {num_frames}, FPS: {actual_fps}\n"
             f"Seed: {actual_seed}"
         )
         if hires_fix:
@@ -1845,6 +1849,8 @@ def generate_video(
                 f"\n🎬 Hires fix ON: {hires_fix_width}x{hires_fix_height} "
                 f"→ {width}x{height} (strength {hires_fix_strength})"
             )
+        if is_ltx and fps != actual_fps:
+            status += f"\n⚠️ LTX uses fixed {actual_fps} fps; ignoring UI setting {fps}"
         yield None, status
 
         reference_images = None
@@ -1884,7 +1890,7 @@ def generate_video(
         saved_video = _save_video_from_tensors(
             frames=result.images,
             output_path=str(video_path),
-            fps=fps,
+            fps=actual_fps,
             audio=audio_bytes,
             audio_sample_rate=44100,
         )
@@ -2780,7 +2786,8 @@ def create_ui():
                                 1, 257, 14, step=1, label="Frames"
                             )
                             video_fps = gr.Slider(
-                                1, 60, 24, step=1, label="FPS"
+                                1, 60, 25, step=1, label="FPS",
+                                info="LTX is fixed at 25 fps"
                             )
                             video_seed = gr.Number(
                                 label="Seed (-1 = random)", value=-1, precision=0

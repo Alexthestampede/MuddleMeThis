@@ -1083,12 +1083,12 @@ class DrawThingsClient:
     def _sanitize_audio_for_mux(audio: bytes, audio_sample_rate: int, video_duration: float):
         """Normalize LTX / Draw Things audio bytes into clean float32 PCM.
 
-        The gRPC audio payload format is ambiguous across server versions: some
-        builds return a WAV container, others return raw float32 little-endian PCM.
-        In addition, LTX 2.3's AudioVAE can emit NaN/Inf samples that break AAC
-        encoding. This helper detects the container, extracts PCM, replaces any
-        invalid samples with silence, clamps to [-1, 1], and trims/pads to the
-        target duration.
+        The gRPC audio payload format is ambiguous across server versions and
+        presets: some builds return a WAV container, others return raw s16le or
+        f32le PCM. In addition, LTX 2.3's AudioVAE can emit NaN/Inf samples that
+        break AAC encoding. This helper detects the container (if any), extracts
+        PCM, replaces any invalid samples with silence, clamps to [-1, 1], and
+        trims/pads to the target duration.
 
         Returns a tuple (clean_float32_bytes, was_sanitized). If the input is
         empty or all silence, returns (None, False).
@@ -1099,71 +1099,131 @@ class DrawThingsClient:
         if not audio:
             return None, False
 
-        # Detect WAV container (RIFF....WAVE)
-        wav_header_size = 0
-        wav_format = None
-        wav_channels = 2
-        wav_rate = audio_sample_rate
-        wav_bits = 32
-        if audio[:4] == b"RIFF" and audio[8:12] == b"WAVE":
+        def _decode_wav(data: bytes):
+            """Parse a RIFF/WAVE container. Returns (samples, rate, channels) or (None, ...)."""
+            if not (data[:4] == b"RIFF" and data[8:12] == b"WAVE"):
+                return None, audio_sample_rate, 2
             pos = 12
-            while pos + 8 <= len(audio):
-                chunk_id = audio[pos : pos + 4]
-                chunk_size = struct.unpack("<I", audio[pos + 4 : pos + 8])[0]
-                chunk_data = audio[pos + 8 : pos + 8 + chunk_size]
+            wav_format = None
+            wav_channels = 2
+            wav_rate = audio_sample_rate
+            wav_bits = 16
+            pcm_data = None
+            while pos + 8 <= len(data):
+                chunk_id = data[pos : pos + 4]
+                chunk_size = struct.unpack("<I", data[pos + 4 : pos + 8])[0]
+                chunk_data = data[pos + 8 : pos + 8 + chunk_size]
                 if chunk_id == b"fmt ":
                     wav_format = struct.unpack("<H", chunk_data[0:2])[0]
                     wav_channels = struct.unpack("<H", chunk_data[2:4])[0]
                     wav_rate = struct.unpack("<I", chunk_data[4:8])[0]
                     wav_bits = struct.unpack("<H", chunk_data[14:16])[0]
                 elif chunk_id == b"data":
-                    wav_header_size = pos + 8
-                    audio = audio[wav_header_size : wav_header_size + chunk_size]
+                    pcm_data = chunk_data
                     break
                 pos += 8 + chunk_size + (chunk_size & 1)
-            audio_sample_rate = wav_rate
 
-        if wav_format is None or wav_format == 3:  # PCM or IEEE float
-            # Interpret as float32 little-endian PCM; trim to a whole sample boundary
-            byte_len = (len(audio) // 4) * 4
-            samples = np.frombuffer(audio[:byte_len], dtype=np.float32).copy()
-        elif wav_format == 1:  # integer PCM
-            if wav_bits == 16:
-                byte_len = (len(audio) // 2) * 2
-                samples = np.frombuffer(audio[:byte_len], dtype=np.int16).astype(np.float32) / 32768.0
-            elif wav_bits == 24:
-                # Pack 24-bit little-endian into int32
-                byte_len = (len(audio) // 3) * 3
-                arr = np.frombuffer(audio[:byte_len], dtype=np.uint8).reshape(-1, 3)
-                ints = (arr[:, 0].astype(np.int32)
-                        | (arr[:, 1].astype(np.int32) << 8)
-                        | (arr[:, 2].astype(np.int32) << 16))
-                ints = np.where(ints >= 0x800000, ints - 0x1000000, ints)
-                samples = ints.astype(np.float32) / 8388608.0
-            elif wav_bits == 32:
-                byte_len = (len(audio) // 4) * 4
-                samples = np.frombuffer(audio[:byte_len], dtype=np.int32).astype(np.float32) / 2147483648.0
+            if pcm_data is None:
+                return None, wav_rate, wav_channels
+
+            if wav_format == 3:  # IEEE float
+                byte_len = (len(pcm_data) // 4) * 4
+                samples = np.frombuffer(pcm_data[:byte_len], dtype=np.float32).copy()
+            elif wav_format == 1:  # integer PCM
+                if wav_bits == 16:
+                    byte_len = (len(pcm_data) // 2) * 2
+                    samples = np.frombuffer(pcm_data[:byte_len], dtype=np.int16).astype(np.float32) / 32768.0
+                elif wav_bits == 24:
+                    byte_len = (len(pcm_data) // 3) * 3
+                    arr = np.frombuffer(pcm_data[:byte_len], dtype=np.uint8).reshape(-1, 3)
+                    ints = (arr[:, 0].astype(np.int32)
+                            | (arr[:, 1].astype(np.int32) << 8)
+                            | (arr[:, 2].astype(np.int32) << 16))
+                    ints = np.where(ints >= 0x800000, ints - 0x1000000, ints)
+                    samples = ints.astype(np.float32) / 8388608.0
+                elif wav_bits == 32:
+                    byte_len = (len(pcm_data) // 4) * 4
+                    samples = np.frombuffer(pcm_data[:byte_len], dtype=np.int32).astype(np.float32) / 2147483648.0
+                else:
+                    return None, wav_rate, wav_channels
             else:
-                return None, False
-        else:
+                return None, wav_rate, wav_channels
+            return samples, wav_rate, wav_channels
+
+        def _decode_raw(data: bytes, fmt: str):
+            """Decode raw little-endian PCM. fmt: 's16le'|'s32le'|'f32le'"""
+            if fmt == "s16le":
+                byte_len = (len(data) // 2) * 2
+                return np.frombuffer(data[:byte_len], dtype=np.int16).astype(np.float32) / 32768.0
+            if fmt == "s32le":
+                byte_len = (len(data) // 4) * 4
+                return np.frombuffer(data[:byte_len], dtype=np.int32).astype(np.float32) / 2147483648.0
+            if fmt == "f32le":
+                byte_len = (len(data) // 4) * 4
+                return np.frombuffer(data[:byte_len], dtype=np.float32).copy()
+            return None
+
+        def _to_stereo(samples, channels):
+            if channels == 1:
+                return np.repeat(samples, 2)
+            if channels >= 2:
+                n_frames = samples.size // channels
+                if n_frames == 0:
+                    return np.repeat(samples, 2)
+                return samples[: n_frames * channels].reshape(n_frames, channels)[:, :2].reshape(-1)
+            return samples
+
+        def _score(samples):
+            """Heuristic: prefer interpretations with few invalid/clip samples and a
+            moderate peak. Lower score is better."""
+            if samples is None or samples.size == 0:
+                return float("inf")
+            finite = np.isfinite(samples)
+            invalid_ratio = 1.0 - finite.mean()
+            valid = samples[finite]
+            if valid.size == 0:
+                return float("inf")
+            peak = np.max(np.abs(valid))
+            # Heavy penalty for invalid values and for values wildly outside [-1, 1]
+            clip_ratio = ((valid > 1.0) | (valid < -1.0)).mean()
+            extreme_ratio = ((valid > 0.99) | (valid < -0.99)).mean()
+            # Favor peaks in the normal audio range (~0.01 to 1.0)
+            peak_penalty = 0.0
+            if peak < 1e-6:
+                peak_penalty = 10.0
+            elif peak > 10.0:
+                peak_penalty = 5.0
+            # Penalize interpretations that map most samples to the extreme edges;
+            # this usually indicates a format mismatch (e.g. s16le read as f32le).
+            return invalid_ratio * 100 + clip_ratio * 50 + extreme_ratio * 20 + peak_penalty
+
+        # Try WAV first
+        candidates = []
+        wav_samples, wav_rate, wav_channels = _decode_wav(audio)
+        if wav_samples is not None:
+            candidates.append((wav_rate, wav_channels, wav_samples, "wav"))
+
+        # Try raw formats. s16le is tried first because many video models (LTX, etc.)
+        # return raw 16-bit PCM rather than float32.
+        for fmt, channels in [("s16le", 2), ("s16le", 1), ("f32le", 2), ("f32le", 1)]:
+            samples = _decode_raw(audio, fmt)
+            if samples is not None:
+                candidates.append((audio_sample_rate, channels, samples, fmt))
+
+        if not candidates:
             return None, False
 
-        if samples.size == 0:
-            return None, False
-
-        # Force stereo output
-        if wav_channels == 1:
-            samples = np.repeat(samples, 2)
-        elif wav_channels >= 2:
-            # Deinterleave and keep only the first two channels
-            n_frames = samples.size // wav_channels
-            if n_frames == 0:
-                # Not enough samples for the declared channel count; fall back to
-                # treating the buffer as mono and duplicate to stereo
-                samples = np.repeat(samples, 2)
-            else:
-                samples = samples[: n_frames * wav_channels].reshape(n_frames, wav_channels)
-                samples = samples[:, :2].reshape(-1)
+        # Pick the best interpretation by heuristic
+        best = min(
+            (
+                (rate, ch, _to_stereo(samples, ch), label)
+                for rate, ch, samples, label in candidates
+            ),
+            key=lambda item: _score(item[2]),
+        )
+        audio_sample_rate, _, samples, detected_format = best
+        print(f"Audio format detected: {detected_format}, sample_rate={audio_sample_rate}, "
+              f"samples={samples.size}, peak={np.max(np.abs(samples)):.4f}")
 
         # Replace NaN/Inf and clamp to valid range
         had_invalid = not np.isfinite(samples).all()
@@ -1178,10 +1238,10 @@ class DrawThingsClient:
             elif samples.size < expected_samples:
                 samples = np.pad(samples, (0, expected_samples - samples.size))
 
-        # Normalize if extremely quiet but non-silent
+        # Only normalize if the signal is usefully non-silent but very quiet
         peak = np.max(np.abs(samples))
-        if peak > 0 and peak < 0.01:
-            samples = samples / peak * 0.5
+        if peak > 0 and peak < 0.001:
+            samples = samples / peak * 0.1
 
         if peak == 0:
             return None, had_invalid
