@@ -1099,12 +1099,20 @@ def on_video_preset_selected(preset_name: str):
             gr.update(),
             gr.update(),
             gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
             "Using custom settings",
         )
 
     preset = settings.get_model_preset(preset_name)
     if not preset:
         return (
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
             gr.update(),
             gr.update(),
             gr.update(),
@@ -1122,6 +1130,10 @@ def on_video_preset_selected(preset_name: str):
     cfg = preset.get("guidanceScale", preset.get("recommended_cfg", 1.0))
     shift = float(preset.get("shift", 1.0))
     num_frames = preset.get("numFrames", 14)
+    hires_fix = preset.get("hiresFix", False)
+    hires_fix_width = preset.get("hiresFixWidth", 640)
+    hires_fix_height = preset.get("hiresFixHeight", 384)
+    hires_fix_strength = preset.get("hiresFixStrength", 0.7)
 
     # Resolve sampler name from ID or string
     sampler = preset.get("sampler", 0)
@@ -1136,6 +1148,8 @@ def on_video_preset_selected(preset_name: str):
     model_name = preset.get("model", "")
     notes = preset.get("notes", "")
     info = f"✅ Video preset applied: {preset.get('name', preset_name)}\n{width}x{height}, {num_frames} frames\n{notes}"
+    if hires_fix:
+        info += f"\n🎬 Hires fix: {hires_fix_width}x{hires_fix_height} → {width}x{height}"
 
     return (
         gr.update(value=width),
@@ -1145,6 +1159,10 @@ def on_video_preset_selected(preset_name: str):
         gr.update(value=sampler_name),
         gr.update(value=shift),
         gr.update(value=num_frames),
+        gr.update(value=hires_fix),
+        gr.update(value=hires_fix_width),
+        gr.update(value=hires_fix_height),
+        gr.update(value=hires_fix_strength),
         info,
     )
 
@@ -1705,25 +1723,15 @@ def _save_video_from_tensors(
         try:
             import imageio_ffmpeg
 
-            # The LTX server sometimes returns audio chunks that are not valid
-            # f32le PCM (NaN/Inf). Sanitize before feeding to ffmpeg.
-            audio_array = np.frombuffer(audio, dtype=np.float32)
-            # Replace NaN/Inf with silence
-            audio_array = np.nan_to_num(audio_array, nan=0.0, posinf=0.0, neginf=0.0)
-            if audio_array.size == 0 or np.max(np.abs(audio_array)) < 1e-12:
-                print("Warning: Received empty or silent audio, skipping audio muxing.")
+            video_duration = len(frames) / max(fps, 1)
+            clean_audio, was_sanitized = DrawThingsClient._sanitize_audio_for_mux(
+                audio, audio_sample_rate, video_duration
+            )
+            if clean_audio is None:
+                print("Warning: Audio is empty or silent after sanitization, skipping mux.")
             else:
-                # Trim/pad audio to match video duration
-                video_duration = len(frames) / max(fps, 1)
-                expected_samples = int(video_duration * audio_sample_rate * 2)
-                if audio_array.size > expected_samples:
-                    audio_array = audio_array[:expected_samples]
-                elif audio_array.size < expected_samples:
-                    audio_array = np.pad(
-                        audio_array, (0, expected_samples - audio_array.size)
-                    )
-
-                sanitized_audio = audio_array.astype(np.float32).tobytes()
+                if was_sanitized:
+                    print("Warning: Sanitized invalid audio samples (NaN/Inf) before muxing.")
 
                 temp_video = output.with_suffix(".temp" + output.suffix)
                 output.rename(temp_video)
@@ -1749,7 +1757,7 @@ def _save_video_from_tensors(
                     "-shortest",
                     str(output),
                 ]
-                subprocess.run(cmd, input=sanitized_audio, check=True)
+                subprocess.run(cmd, input=clean_audio, check=True)
                 temp_video.unlink(missing_ok=True)
         except Exception as e:
             print(f"Warning: Could not mux audio: {e}")
@@ -1772,6 +1780,10 @@ def generate_video(
     num_frames: int,
     fps: int,
     shift: float,
+    hires_fix: bool = False,
+    hires_fix_width: int = 640,
+    hires_fix_height: int = 384,
+    hires_fix_strength: float = 0.7,
     start_image=None,
     progress=gr.Progress(),
 ):
@@ -1815,6 +1827,10 @@ def generate_video(
             fps_id=fps,
             motion_bucket_id=127,
             compression_artifacts=0,
+            hires_fix=hires_fix,
+            hires_fix_start_width=hires_fix_width // 64,
+            hires_fix_start_height=hires_fix_height // 64,
+            hires_fix_strength=hires_fix_strength,
         )
 
         status = (
@@ -1824,6 +1840,11 @@ def generate_video(
             f"Size: {width}x{height}, Frames: {num_frames}, FPS: {fps}\n"
             f"Seed: {actual_seed}"
         )
+        if hires_fix:
+            status += (
+                f"\n🎬 Hires fix ON: {hires_fix_width}x{hires_fix_height} "
+                f"→ {width}x{height} (strength {hires_fix_strength})"
+            )
         yield None, status
 
         reference_images = None
@@ -2765,6 +2786,35 @@ def create_ui():
                                 label="Seed (-1 = random)", value=-1, precision=0
                             )
 
+                        video_hires_fix = gr.Checkbox(
+                            label="High Resolution Fix (LTX spatial upscaler)",
+                            value=False,
+                            info="Two-pass latent upscaling. 1st pass must be 1/2 or 2/3 of final resolution.",
+                        )
+                        with gr.Row():
+                            video_hires_fix_width = gr.Number(
+                                label="Hires 1st Pass Width",
+                                value=640,
+                                precision=0,
+                                step=64,
+                                info="Pixels (preset converts to scale units)",
+                            )
+                            video_hires_fix_height = gr.Number(
+                                label="Hires 1st Pass Height",
+                                value=384,
+                                precision=0,
+                                step=64,
+                                info="Pixels (preset converts to scale units)",
+                            )
+                            video_hires_fix_strength = gr.Slider(
+                                0.0,
+                                1.0,
+                                0.7,
+                                step=0.05,
+                                label="Hires Fix Strength",
+                                info="Second-pass denoising strength",
+                            )
+
                         video_model = gr.Dropdown(
                             label="Model",
                             choices=[],
@@ -3426,6 +3476,10 @@ def create_ui():
                 video_frames,
                 video_fps,
                 video_shift,
+                video_hires_fix,
+                video_hires_fix_width,
+                video_hires_fix_height,
+                video_hires_fix_strength,
                 video_start_image,
             ],
             outputs=[video_preview, video_status],
@@ -3443,6 +3497,10 @@ def create_ui():
                 video_sampler,
                 video_shift,
                 video_frames,
+                video_hires_fix,
+                video_hires_fix_width,
+                video_hires_fix_height,
+                video_hires_fix_strength,
                 video_preset_info,
             ],
         )
