@@ -1722,6 +1722,7 @@ def _save_video_from_tensors(
     if audio:
         try:
             import imageio_ffmpeg
+            import struct
 
             video_duration = len(frames) / max(fps, 1)
             clean_audio, was_sanitized = DrawThingsClient._sanitize_audio_for_mux(
