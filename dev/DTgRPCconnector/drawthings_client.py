@@ -1238,6 +1238,11 @@ class DrawThingsClient:
             elif samples.size < expected_samples:
                 samples = np.pad(samples, (0, expected_samples - samples.size))
 
+        # ffmpeg's f32le decoder expects complete stereo frames (8 bytes each),
+        # so ensure the final sample count is even.
+        if samples.size % 2 == 1:
+            samples = np.append(samples, 0.0)
+
         # Only normalize if the signal is usefully non-silent but very quiet
         peak = np.max(np.abs(samples))
         if peak > 0 and peak < 0.001:

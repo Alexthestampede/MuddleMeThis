@@ -1736,20 +1736,41 @@ def _save_video_from_tensors(
                 temp_video = output.with_suffix(".temp" + output.suffix)
                 output.rename(temp_video)
 
+                # Write sanitized float32 PCM to a temporary WAV file so ffmpeg can
+                # auto-detect the format instead of relying on raw f32le piping.
+                temp_audio = output.with_suffix(".temp.wav")
+                with open(temp_audio, "wb") as f:
+                    # Standard RIFF/WAVE header for IEEE float 32-bit stereo
+                    num_samples = len(clean_audio) // 4
+                    data_size = len(clean_audio)
+                    byte_rate = audio_sample_rate * 4 * 2
+                    header = struct.pack(
+                        "<4sI4s4sIHHIIHH4sI",
+                        b"RIFF",
+                        36 + data_size,
+                        b"WAVE",
+                        b"fmt ",
+                        16,
+                        3,
+                        2,
+                        audio_sample_rate,
+                        byte_rate,
+                        8,
+                        32,
+                        b"data",
+                        data_size,
+                    )
+                    f.write(header)
+                    f.write(clean_audio)
+
                 ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
                 cmd = [
                     ffmpeg_path,
                     "-y",
                     "-i",
                     str(temp_video),
-                    "-f",
-                    "f32le",
-                    "-ar",
-                    str(audio_sample_rate),
-                    "-ac",
-                    "2",
                     "-i",
-                    "-",
+                    str(temp_audio),
                     "-c:v",
                     "copy",
                     "-c:a",
@@ -1757,8 +1778,9 @@ def _save_video_from_tensors(
                     "-shortest",
                     str(output),
                 ]
-                subprocess.run(cmd, input=clean_audio, check=True)
+                subprocess.run(cmd, check=True)
                 temp_video.unlink(missing_ok=True)
+                temp_audio.unlink(missing_ok=True)
         except Exception as e:
             print(f"Warning: Could not mux audio: {e}")
             if not output.exists() and temp_video.exists():
