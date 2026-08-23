@@ -1907,13 +1907,13 @@ def generate_video(
             status += f"\n⚠️ LTX uses fixed {actual_fps} fps; ignoring UI setting {fps}"
         yield None, status
 
-        reference_images = None
+        input_image = None
         if start_image is not None:
             try:
                 img = Image.fromarray(start_image).convert("RGB")
                 img = img.resize((width, height), Image.Resampling.LANCZOS)
-                reference_images = [ReferenceImage(image=img, weight=1.0, hint_type="shuffle")]
-                status += "\n📎 Using starting image as reference"
+                input_image = img
+                status += "\n📎 Using starting image as first frame"
                 yield None, status
             except Exception as e:
                 print(f"Warning: Could not process starting image: {e}")
@@ -1922,8 +1922,8 @@ def generate_video(
             prompt=prompt,
             config=config,
             negative_prompt=negative_prompt,
-            input_image=None,
-            reference_images=reference_images,
+            input_image=input_image,
+            reference_images=None,
             progress_callback=lambda stage, step: progress(step / max(steps, 1), desc=stage),
         )
 
