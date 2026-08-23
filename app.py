@@ -941,6 +941,7 @@ SAMPLERS = {
     "DDIM Trailing": 16,
     "UniPC Trailing": 17,
     "UniPC AYS": 18,
+    "TCD Trailing": 19,
 }
 
 SAMPLER_NAMES = list(SAMPLERS.keys())
@@ -1050,6 +1051,100 @@ def on_preset_selected(
             gr.update(),
             gr.update(),
         )
+
+
+def load_video_presets() -> List[Tuple[str, str]]:
+    """Load presets that support video generation (have numFrames field).
+
+    Returns:
+        List of (display_name, filename) tuples
+    """
+    video_presets = [("Custom (no preset)", "")]
+    presets_dir = settings.presets_dir
+
+    if not presets_dir.exists():
+        return video_presets
+
+    for preset_file in presets_dir.glob("*.json"):
+        try:
+            with open(preset_file, "r") as f:
+                preset_data = json.load(f)
+
+            # A video-capable preset has numFrames or notes mention LTX/video
+            if (
+                "numFrames" in preset_data
+                or "num_frames" in preset_data
+                or "video" in preset_data.get("notes", "").lower()
+                or "ltx" in preset_data.get("name", "").lower()
+                or "ltx" in preset_file.stem.lower()
+            ):
+                display_name = preset_data.get("name", preset_file.stem)
+                video_presets.append((display_name, preset_file.stem))
+        except Exception as e:
+            print(f"Warning: Failed to load preset {preset_file}: {e}")
+
+    return video_presets
+
+
+def on_video_preset_selected(preset_name: str):
+    """Apply a video preset to the Video tab controls"""
+    if preset_name == "Custom (no preset)" or not preset_name:
+        return (
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            "Using custom settings",
+        )
+
+    preset = settings.get_model_preset(preset_name)
+    if not preset:
+        return (
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            f"⚠️ Preset not found: {preset_name}",
+        )
+
+    # Extract video-relevant settings
+    width = preset.get("width", 512)
+    height = preset.get("height", 512)
+    steps = preset.get("steps", preset.get("recommended_steps", 16))
+    cfg = preset.get("guidanceScale", preset.get("recommended_cfg", 1.0))
+    shift = float(preset.get("shift", 1.0))
+    num_frames = preset.get("numFrames", 14)
+
+    # Resolve sampler name from ID or string
+    sampler = preset.get("sampler", 0)
+    if isinstance(sampler, str):
+        sampler_name = sampler if sampler in SAMPLERS else SAMPLER_DEFAULT
+    else:
+        sampler_name = next(
+            (name for name, sid in SAMPLERS.items() if sid == sampler),
+            SAMPLER_DEFAULT,
+        )
+
+    model_name = preset.get("model", "")
+    notes = preset.get("notes", "")
+    info = f"✅ Video preset applied: {preset.get('name', preset_name)}\n{width}x{height}, {num_frames} frames\n{notes}"
+
+    return (
+        gr.update(value=width),
+        gr.update(value=height),
+        gr.update(value=steps),
+        gr.update(value=cfg),
+        gr.update(value=sampler_name),
+        gr.update(value=shift),
+        gr.update(value=num_frames),
+        info,
+    )
 
 
 def on_negative_prompt_preset_selected(preset_name: str) -> str:
@@ -1589,6 +1684,7 @@ def generate_video(
     negative_prompt: str,
     num_frames: int,
     fps: int,
+    shift: float,
     start_image=None,
     progress=gr.Progress(),
 ):
@@ -1625,7 +1721,7 @@ def generate_video(
             seed=actual_seed,
             seed_mode=2,
             clip_skip=1,
-            shift=1.0,
+            shift=shift,
             batch_count=1,
             batch_size=1,
             num_frames=num_frames,
@@ -2513,6 +2609,22 @@ def create_ui():
                             type="numpy",
                             sources=["upload", "clipboard"],
                         )
+
+                        # Load video-capable presets for the dropdown
+                        video_preset_choices = [name for name, _ in load_video_presets()]
+                        video_preset = gr.Dropdown(
+                            label="Video Preset",
+                            choices=video_preset_choices,
+                            value="Custom (no preset)",
+                            interactive=True,
+                        )
+                        video_preset_info = gr.Textbox(
+                            label="Preset Info",
+                            value="Select a video preset to apply official settings",
+                            interactive=False,
+                            lines=2,
+                        )
+
                         video_prompt = gr.Textbox(
                             label="Video Prompt",
                             placeholder="Describe the video you want to generate",
@@ -2544,6 +2656,15 @@ def create_ui():
                             choices=SAMPLER_NAMES,
                             value=SAMPLER_DEFAULT,
                             label="Sampler",
+                        )
+
+                        video_shift = gr.Slider(
+                            0.0,
+                            10.0,
+                            1.0,
+                            step=0.1,
+                            label="Shift",
+                            info="Timestep shift for video generation",
                         )
 
                         with gr.Row():
@@ -3217,9 +3338,26 @@ def create_ui():
                 video_negative,
                 video_frames,
                 video_fps,
+                video_shift,
                 video_start_image,
             ],
             outputs=[video_preview, video_status],
+        )
+
+        # Wire video preset selection
+        video_preset.change(
+            fn=on_video_preset_selected,
+            inputs=[video_preset],
+            outputs=[
+                video_width,
+                video_height,
+                video_steps,
+                video_cfg,
+                video_sampler,
+                video_shift,
+                video_frames,
+                video_preset_info,
+            ],
         )
 
         grpc_connect_btn.click(
