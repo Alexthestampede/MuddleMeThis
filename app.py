@@ -1705,32 +1705,52 @@ def _save_video_from_tensors(
         try:
             import imageio_ffmpeg
 
-            temp_video = output.with_suffix(".temp" + output.suffix)
-            output.rename(temp_video)
+            # The LTX server sometimes returns audio chunks that are not valid
+            # f32le PCM (NaN/Inf). Sanitize before feeding to ffmpeg.
+            audio_array = np.frombuffer(audio, dtype=np.float32)
+            # Replace NaN/Inf with silence
+            audio_array = np.nan_to_num(audio_array, nan=0.0, posinf=0.0, neginf=0.0)
+            if audio_array.size == 0 or np.max(np.abs(audio_array)) < 1e-12:
+                print("Warning: Received empty or silent audio, skipping audio muxing.")
+            else:
+                # Trim/pad audio to match video duration
+                video_duration = len(frames) / max(fps, 1)
+                expected_samples = int(video_duration * audio_sample_rate * 2)
+                if audio_array.size > expected_samples:
+                    audio_array = audio_array[:expected_samples]
+                elif audio_array.size < expected_samples:
+                    audio_array = np.pad(
+                        audio_array, (0, expected_samples - audio_array.size)
+                    )
 
-            ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
-            cmd = [
-                ffmpeg_path,
-                "-y",
-                "-i",
-                str(temp_video),
-                "-f",
-                "f32le",
-                "-ar",
-                str(audio_sample_rate),
-                "-ac",
-                "2",
-                "-i",
-                "-",
-                "-c:v",
-                "copy",
-                "-c:a",
-                "aac",
-                "-shortest",
-                str(output),
-            ]
-            subprocess.run(cmd, input=audio, check=True)
-            temp_video.unlink(missing_ok=True)
+                sanitized_audio = audio_array.astype(np.float32).tobytes()
+
+                temp_video = output.with_suffix(".temp" + output.suffix)
+                output.rename(temp_video)
+
+                ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+                cmd = [
+                    ffmpeg_path,
+                    "-y",
+                    "-i",
+                    str(temp_video),
+                    "-f",
+                    "f32le",
+                    "-ar",
+                    str(audio_sample_rate),
+                    "-ac",
+                    "2",
+                    "-i",
+                    "-",
+                    "-c:v",
+                    "copy",
+                    "-c:a",
+                    "aac",
+                    "-shortest",
+                    str(output),
+                ]
+                subprocess.run(cmd, input=sanitized_audio, check=True)
+                temp_video.unlink(missing_ok=True)
         except Exception as e:
             print(f"Warning: Could not mux audio: {e}")
             if not output.exists() and temp_video.exists():
