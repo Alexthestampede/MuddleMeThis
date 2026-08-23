@@ -661,10 +661,14 @@ class DrawThingsClient:
                     private_key=None,
                     certificate_chain=None,
                 )
-                # NOTE: Removed grpc.ssl_target_name_override="localhost" which
-                # broke connections to non-localhost Draw Things servers (e.g.
-                # 192.168.2.150:7859). verify_ssl=False with self-signed/root CA
-                # certs is the original working behavior.
+                # Draw Things gRPC server certs are self-signed for "localhost".
+                # When connecting by IP (e.g. 192.168.2.150:7859), tell gRPC to
+                # expect that peer name instead of the IP address.
+                options.extend(
+                    [
+                        ("grpc.ssl_target_name_override", "localhost"),
+                    ]
+                )
 
             self.channel = grpc.secure_channel(
                 server_address, credentials, options=options
