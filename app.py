@@ -1697,7 +1697,7 @@ def _save_video_from_tensors(
     output_path: str,
     fps: int = 24,
     audio: Optional[bytes] = None,
-    audio_sample_rate: int = 44100,
+    audio_sample_rate: int = 48000,
 ) -> str:
     """Assemble decoded Draw Things tensor frames into an MP4 video.
 
@@ -1881,7 +1881,7 @@ def generate_video(
             output_path=str(video_path),
             fps=actual_fps,
             audio=audio_bytes,
-            audio_sample_rate=44100,
+            audio_sample_rate=48000,
         )
 
         final_status = (

@@ -1108,18 +1108,34 @@ class DrawThingsClient:
             raise RuntimeError(
                 "Audio payload is fpzip-compressed but fpzip is not installed"
             )
-        f32 = fpzip.decompress(data[68:], order="C")
-        return np.asarray(f32, dtype=np.float32).tobytes()
+        arr = np.asarray(fpzip.decompress(data[68:], order="C"))
+
+        # Verified audio layout: (1, 1, channels, samples), planar channels
+        # (all left, then all right). Emit interleaved stereo.
+        if arr.ndim == 4 and arr.shape[0] == 1 and arr.shape[1] == 1 and arr.shape[2] == 2:
+            left = arr[0, 0, 0, :]
+            right = arr[0, 0, 1, :]
+            return np.column_stack((left, right)).reshape(-1).astype(np.float32).tobytes()
+
+        return arr.reshape(-1).astype(np.float32).tobytes()
 
     @classmethod
     def decode_audio(cls, audio_chunks) -> Optional[bytes]:
         """Decode a list of generatedAudio blobs into one float32 PCM buffer.
 
+        LTX audio is delivered at 48 kHz stereo (verified empirically:
+        samples_per_channel = 1920 * num_frames - 1440). Duplicate chunks
+        (identical bytes) are dropped to avoid repeated audio.
+
         Returns None when the list is empty.
         """
         decoded = []
         for chunk in audio_chunks or []:
-            decoded.append(cls.decode_audio_blob(chunk))
+            blob = cls.decode_audio_blob(chunk)
+            if blob in decoded:
+                print("Warning: dropping duplicate audio chunk")
+                continue
+            decoded.append(blob)
         return b"".join(decoded) if decoded else None
 
     @staticmethod
@@ -1301,7 +1317,7 @@ class DrawThingsClient:
         cls,
         video_path: str,
         audio: bytes,
-        audio_sample_rate: int = 44100,
+        audio_sample_rate: int = 48000,
         video_duration: float = 0.0,
     ) -> str:
         """Mux sanitized audio into an existing video file in place.
@@ -1314,7 +1330,7 @@ class DrawThingsClient:
         Args:
             video_path: Path to an existing video file (modified in place)
             audio: Raw audio bytes (decoded float32 PCM from decode_audio)
-            audio_sample_rate: Sample rate of the audio (default 44100)
+            audio_sample_rate: Sample rate of the audio (default 48000)
             video_duration: Target duration in seconds for trimming/padding
 
         Returns:
@@ -1396,7 +1412,7 @@ class DrawThingsClient:
         output_path: str,
         fps: int = 24,
         audio: Optional[bytes] = None,
-        audio_sample_rate: int = 44100,
+        audio_sample_rate: int = 48000,
         frame_decoder: Optional[Callable[[bytes], "Image.Image"]] = None,
     ) -> str:
         """Assemble video frames into a playable video file.
