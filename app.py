@@ -1692,34 +1692,6 @@ def generate_image(
         )
 
 
-def _decode_audio_blob(data: bytes) -> bytes:
-    """Decode one audio chunk into contiguous bytes.
-
-    Video-model audio responses use the same CCV tensor wrapper as frames:
-    a 68-byte header followed by fpzip-compressed float32. If the blob has
-    that header, return the decompressed float32 bytes; otherwise return the
-    bytes unchanged (already raw PCM).
-    """
-    import struct
-    import numpy as np
-
-    if len(data) < 68:
-        return data
-
-    header = struct.unpack_from("<32I", data, 0)
-    magic = header[0]
-    if magic != 1012247:  # MAGIC_COMPRESSED
-        return data
-
-    compressed = data[68:]
-    try:
-        import fpzip
-    except ImportError:
-        raise RuntimeError("Audio payload is fpzip-compressed but fpzip is not installed")
-    f32 = fpzip.decompress(compressed, order="C")
-    return f32.astype(np.float32).tobytes()
-
-
 def _save_video_from_tensors(
     frames: List[bytes],
     output_path: str,
@@ -1730,10 +1702,8 @@ def _save_video_from_tensors(
     """Assemble decoded Draw Things tensor frames into an MP4 video.
 
     imageio's imread cannot read raw tensor chunks, so we decode each frame
-    with tensor_to_pil() and write numpy arrays via imageio.
-
-    Audio chunks arrive as separate CCV tensor blobs; decode each one and
-    concatenate the decompressed float32 PCM before sanitization.
+    with tensor_to_pil() and write numpy arrays via imageio. Audio muxing
+    (sanitization + WAV intermediate + ffmpeg) is delegated to the connector.
     """
     import imageio
     import numpy as np
@@ -1752,71 +1722,14 @@ def _save_video_from_tensors(
 
     if audio:
         try:
-            import imageio_ffmpeg
-            import struct
-
-            video_duration = len(frames) / max(fps, 1)
-            clean_audio, was_sanitized = DrawThingsClient._sanitize_audio_for_mux(
-                audio, audio_sample_rate, video_duration
+            DrawThingsClient.mux_audio_into_video(
+                video_path=str(output),
+                audio=audio,
+                audio_sample_rate=audio_sample_rate,
+                video_duration=len(frames) / max(fps, 1),
             )
-            if clean_audio is None:
-                print("Warning: Audio is empty or silent after sanitization, skipping mux.")
-            else:
-                if was_sanitized:
-                    print("Warning: Sanitized invalid audio samples (NaN/Inf) before muxing.")
-
-                temp_video = output.with_suffix(".temp" + output.suffix)
-                output.rename(temp_video)
-
-                # Write sanitized float32 PCM to a temporary WAV file so ffmpeg can
-                # auto-detect the format instead of relying on raw f32le piping.
-                temp_audio = output.with_suffix(".temp.wav")
-                with open(temp_audio, "wb") as f:
-                    # Standard RIFF/WAVE header for IEEE float 32-bit stereo
-                    num_samples = len(clean_audio) // 4
-                    data_size = len(clean_audio)
-                    byte_rate = audio_sample_rate * 4 * 2
-                    header = struct.pack(
-                        "<4sI4s4sIHHIIHH4sI",
-                        b"RIFF",
-                        36 + data_size,
-                        b"WAVE",
-                        b"fmt ",
-                        16,
-                        3,
-                        2,
-                        audio_sample_rate,
-                        byte_rate,
-                        8,
-                        32,
-                        b"data",
-                        data_size,
-                    )
-                    f.write(header)
-                    f.write(clean_audio)
-
-                ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
-                cmd = [
-                    ffmpeg_path,
-                    "-y",
-                    "-i",
-                    str(temp_video),
-                    "-i",
-                    str(temp_audio),
-                    "-c:v",
-                    "copy",
-                    "-c:a",
-                    "aac",
-                    "-shortest",
-                    str(output),
-                ]
-                subprocess.run(cmd, check=True)
-                temp_video.unlink(missing_ok=True)
-                temp_audio.unlink(missing_ok=True)
         except Exception as e:
             print(f"Warning: Could not mux audio: {e}")
-            if not output.exists() and temp_video.exists():
-                temp_video.rename(output)
 
     return str(output)
 
@@ -1951,19 +1864,17 @@ def generate_video(
                     f"({'CCV tensor' if magic == 1012247 else 'raw/PCM'})"
                 )
 
-        # Decode audio chunks. LTX audio arrives as CCV tensor blobs with the
-        # same 68-byte header + fpzip payload as video frames. Decode each
-        # chunk first, then concatenate.
-        decoded_audio_chunks = []
-        for chunk in result.audio:
-            try:
-                decoded_audio_chunks.append(_decode_audio_blob(chunk))
-            except RuntimeError as e:
-                yield None, f"❌ Audio decode error: {e}"
-                return
-            except Exception as e:
-                print(f"Warning: skipping malformed audio chunk ({e})")
-        audio_bytes = b"".join(decoded_audio_chunks) if decoded_audio_chunks else None
+        # Decode audio chunks via the connector (CCV tensor blobs with fpzip
+        # float32 payload, same wrapper as video frames). Decode each chunk
+        # separately BEFORE joining so headers do not pollute the waveform.
+        try:
+            audio_bytes = state.grpc_client.decode_audio(result.audio)
+        except RuntimeError as e:
+            yield None, f"❌ Audio decode error: {e}"
+            return
+        except Exception as e:
+            print(f"Warning: skipping malformed audio chunk ({e})")
+            audio_bytes = None
 
         saved_video = _save_video_from_tensors(
             frames=result.images,

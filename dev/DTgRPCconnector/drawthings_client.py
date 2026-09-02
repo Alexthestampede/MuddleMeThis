@@ -1080,6 +1080,48 @@ class DrawThingsClient:
         return saved_files
 
     @staticmethod
+    def decode_audio_blob(data: bytes) -> bytes:
+        """Decode one gRPC audio chunk into contiguous float32 PCM bytes.
+
+        Video-model audio (LTX, etc.) arrives as CCV tensor blobs with the same
+        68-byte header + fpzip-compressed float32 payload as video frames. If
+        the blob carries that header, return the decompressed float32 bytes;
+        otherwise return the bytes unchanged (already raw PCM).
+
+        Callers should decode each chunk separately BEFORE joining, so header
+        bytes from chunk N+1 do not pollute chunk N's waveform.
+        """
+        import struct
+        import numpy as np
+
+        if len(data) < 128:
+            return data
+
+        header = struct.unpack_from("<32I", data, 0)
+        if header[0] != 1012247:  # MAGIC_COMPRESSED
+            return data
+
+        try:
+            import fpzip
+        except ImportError:
+            raise RuntimeError(
+                "Audio payload is fpzip-compressed but fpzip is not installed"
+            )
+        f32 = fpzip.decompress(data[68:], order="C")
+        return np.asarray(f32, dtype=np.float32).tobytes()
+
+    @classmethod
+    def decode_audio(cls, audio_chunks) -> Optional[bytes]:
+        """Decode a list of generatedAudio blobs into one float32 PCM buffer.
+
+        Returns None when the list is empty.
+        """
+        decoded = []
+        for chunk in audio_chunks or []:
+            decoded.append(cls.decode_audio_blob(chunk))
+        return b"".join(decoded) if decoded else None
+
+    @staticmethod
     def _sanitize_audio_for_mux(audio: bytes, audio_sample_rate: int, video_duration: float):
         """Normalize LTX / Draw Things audio bytes into clean float32 PCM.
 
@@ -1253,6 +1295,100 @@ class DrawThingsClient:
 
         return samples.astype(np.float32).tobytes(), had_invalid
 
+    @classmethod
+    def mux_audio_into_video(
+        cls,
+        video_path: str,
+        audio: bytes,
+        audio_sample_rate: int = 44100,
+        video_duration: float = 0.0,
+    ) -> str:
+        """Mux sanitized audio into an existing video file in place.
+
+        Sanitizes the audio (NaN/Inf removal, clamping, duration matching),
+        writes an intermediate WAV so ffmpeg can auto-detect the format, and
+        remuxes video (stream copy) + AAC audio into video_path. On failure,
+        the original frames-only video is restored.
+
+        Args:
+            video_path: Path to an existing video file (modified in place)
+            audio: Raw audio bytes (decoded float32 PCM from decode_audio)
+            audio_sample_rate: Sample rate of the audio (default 44100)
+            video_duration: Target duration in seconds for trimming/padding
+
+        Returns:
+            The video path
+        """
+        import imageio_ffmpeg
+        import struct
+
+        video = Path(video_path)
+        clean_audio, was_sanitized = cls._sanitize_audio_for_mux(
+            audio, audio_sample_rate, video_duration
+        )
+        if clean_audio is None:
+            print("Warning: Audio is empty or silent after sanitization, skipping mux.")
+            return str(video)
+        if was_sanitized:
+            print("Warning: Sanitized invalid audio samples (NaN/Inf) before muxing.")
+
+        temp_video = video.with_suffix(".temp" + video.suffix)
+        video.rename(temp_video)
+
+        # Write sanitized float32 PCM to a temporary WAV file so ffmpeg can
+        # auto-detect the format instead of relying on raw f32le stdin piping
+        # (fragile: requires complete stereo frames and exact byte alignment).
+        temp_audio = video.with_suffix(".temp.wav")
+        data_size = len(clean_audio)
+        byte_rate = audio_sample_rate * 4 * 2
+        wav_header = struct.pack(
+            "<4sI4s4sIHHIIHH4sI",
+            b"RIFF",
+            36 + data_size,
+            b"WAVE",
+            b"fmt ",
+            16,
+            3,  # IEEE float
+            2,  # stereo
+            audio_sample_rate,
+            byte_rate,
+            8,  # block align
+            32,  # bits per sample
+            b"data",
+            data_size,
+        )
+        try:
+            with open(temp_audio, "wb") as f:
+                f.write(wav_header)
+                f.write(clean_audio)
+
+            ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+            cmd = [
+                ffmpeg_path,
+                "-y",
+                "-i",
+                str(temp_video),
+                "-i",
+                str(temp_audio),
+                "-c:v",
+                "copy",
+                "-c:a",
+                "aac",
+                "-shortest",
+                str(video),
+            ]
+            subprocess.run(cmd, check=True)
+            temp_video.unlink(missing_ok=True)
+        except Exception:
+            # Restore frames-only video on failure
+            if not video.exists() and temp_video.exists():
+                temp_video.rename(video)
+            raise
+        finally:
+            temp_audio.unlink(missing_ok=True)
+
+        return str(video)
+
     def save_video(
         self,
         frames: List[bytes],
@@ -1293,49 +1429,16 @@ class DrawThingsClient:
             # If audio is provided, try to mux it in
             if audio:
                 try:
-                    import imageio_ffmpeg
-
                     video_duration = len(frames) / max(fps, 1)
-                    clean_audio, was_sanitized = self._sanitize_audio_for_mux(
-                        audio, audio_sample_rate, video_duration
+                    self.mux_audio_into_video(
+                        video_path=str(output),
+                        audio=audio,
+                        audio_sample_rate=audio_sample_rate,
+                        video_duration=video_duration,
                     )
-                    if clean_audio is None:
-                        print("Warning: Audio is empty or silent after sanitization, skipping mux.")
-                    else:
-                        if was_sanitized:
-                            print("Warning: Sanitized invalid audio samples (NaN/Inf) before muxing.")
-
-                        temp_video = output.with_suffix(".temp" + output.suffix)
-                        output.rename(temp_video)
-
-                        ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
-                        cmd = [
-                            ffmpeg_path,
-                            "-y",
-                            "-i",
-                            str(temp_video),
-                            "-f",
-                            "f32le",
-                            "-ar",
-                            str(audio_sample_rate),
-                            "-ac",
-                            "2",
-                            "-i",
-                            "-",
-                            "-c:v",
-                            "copy",
-                            "-c:a",
-                            "aac",
-                            "-shortest",
-                            str(output),
-                        ]
-                        subprocess.run(cmd, input=clean_audio, check=True)
-                        temp_video.unlink(missing_ok=True)
                 except Exception as e:
                     print(f"Warning: Could not mux audio: {e}")
                     # Keep frames-only video
-                    if not output.exists() and temp_video.exists():
-                        temp_video.rename(output)
 
             return str(output)
         except ImportError:

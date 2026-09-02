@@ -912,15 +912,16 @@ with DrawThingsClient("server.example.com:7859", insecure=False, verify_ssl=Fals
         client.save_video(
             result.images,
             output_path="output/ltx_video.mp4",
-            fps=24,
-            audio=b"".join(result.audio) if result.audio else None,
+            fps=25,  # LTX output is fixed at 25 fps
+            audio=client.decode_audio(result.audio),
         )
 ```
 
 **Notes:**
 - LTX 2.3 VAE uses different latent ratios than image models; the server internally computes `startScaleFactor = 32` and doubles the scale. Pass pixel dimensions that are multiples of 64 (e.g., 540p, 720p) to avoid reshape crashes.
 - `generate_image()` will also return LTX frames but silently discards the audio track. Use `generate_media()` for full audio-video capture.
-- The audio bytes are raw stereo float32 PCM at 44.1 kHz. `save_video()` handles the FFmpeg muxing for you.
+- Audio chunks arrive as CCV tensor blobs (68-byte header + fpzip-compressed float32), the same wrapper used for video frames. Decode each chunk with `decode_audio()` / `decode_audio_blob()` **before** joining or interpreting as PCM — joining raw blobs produces noise. `save_video()` does NOT decode for you; pass `client.decode_audio(result.audio)`.
+- LTX output frame rate is fixed at 25 fps regardless of `fps_id`.
 
 ### Stage 2 Models
 

@@ -107,4 +107,19 @@ For edit models, use `"shuffle"` with `strength=1.0` in the config.
 
 ## Video Generation Notes
 
-The server returns `audio` data alongside images for video generation (LTX, etc.). This client currently ignores audio and only extracts image frames. To handle video+audio, the `GenerateImage` response would need to parse the audio field from `ImageGenerationResponse`.
+The server returns `audio` data alongside images for video generation (LTX, etc.).
+`generate_media()` captures both frames and audio in a `GenerationResult`.
+
+**Audio format (verified empirically):** each `generatedAudio` chunk is a CCV
+tensor blob — 68-byte header with magic `1012247` followed by fpzip-compressed
+float32 PCM (stereo, 44.1 kHz) — the exact same wrapper as video frames. Decode
+each chunk with `decode_audio_blob()` / `decode_audio(result.audio)` before
+joining. Treating raw blobs as PCM produces full-scale static.
+
+**First-frame conditioning (LTX I2V):** pass the starting frame as
+`input_image` with `strength=1.0`. `reference_images` with `hint_type="shuffle"`
+is for edit/kontext models only and is ignored by LTX.
+
+**Muxing:** `save_video()` sanitizes NaN/Inf samples, writes an intermediate
+WAV (IEEE float, stereo), and muxes with ffmpeg. Audio must have an even
+float32 sample count (complete stereo frames). LTX output is fixed at 25 fps.
