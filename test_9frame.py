@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Quick 9-frame LTX video generation test with audio validation."""
+"""Quick 121-frame LTX video generation test with audio validation."""
 
 import sys
 import numpy as np
@@ -28,14 +28,14 @@ config = ImageGenerationConfig(
     shift=5,
     batch_count=1,
     batch_size=1,
-    num_frames=9,
+    num_frames=121,
     fps_id=25,
     motion_bucket_id=127,
     compression_artifacts=0,
     hires_fix=False,
 )
 
-print("Generating 9-frame video...")
+print("Generating 121-frame video...")
 result = client.generate_media(
     prompt="a red car driving down a desert highway",
     config=config,
@@ -59,7 +59,7 @@ if result.audio:
 
     out = client.save_video(
         result.images,
-        output_path="outputs/test_9frame.mp4",
+        output_path="outputs/test_121frame.mp4",
         fps=25,
         audio=audio_bytes,
         frame_decoder=tensor_to_pil,
