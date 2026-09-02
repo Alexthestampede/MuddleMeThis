@@ -33,6 +33,7 @@ import random
 import hashlib
 import tempfile
 import subprocess
+import numpy as np
 from pathlib import Path
 from typing import Optional, Callable, List
 from dataclasses import dataclass, field
@@ -1396,18 +1397,23 @@ class DrawThingsClient:
         fps: int = 24,
         audio: Optional[bytes] = None,
         audio_sample_rate: int = 44100,
+        frame_decoder: Optional[Callable[[bytes], "Image.Image"]] = None,
     ) -> str:
-        """Assemble decoded video frames into a playable video file.
+        """Assemble video frames into a playable video file.
 
-        Uses imageio for frame muxing and FFmpeg (via imageio-ffmpeg) for audio muxing.
-        Falls back to frame-only output if imageio is unavailable.
+        Uses imageio for frame muxing and FFmpeg (via imageio-ffmpeg) for audio
+        muxing. Falls back to frame-only output if imageio is unavailable.
 
         Args:
-            frames: List of decoded frame bytes (PNG or tensor chunks decoded by client)
+            frames: List of frame blobs. Raw CCV tensor chunks require
+                frame_decoder (e.g. tensor_decoder.tensor_to_pil); PNG/JPEG
+                bytes can be read without one.
             output_path: Path for output video file (e.g. "output.mp4")
             fps: Frames per second
-            audio: Optional raw audio bytes (stereo, typically from LTX 2.3)
+            audio: Optional decoded audio bytes (see decode_audio())
             audio_sample_rate: Sample rate of the provided audio bytes
+            frame_decoder: Optional callable converting each frame blob to a
+                PIL Image or numpy array. Required for CCV tensor frames.
 
         Returns:
             Path to the saved video file
@@ -1422,7 +1428,14 @@ class DrawThingsClient:
             # Write frames-only video
             writer = imageio.get_writer(output_path, fps=fps, codec="libx264")
             for frame_bytes in frames:
-                frame = imageio.imread(frame_bytes)
+                if frame_decoder is not None:
+                    frame = frame_decoder(frame_bytes)
+                else:
+                    frame = imageio.imread(frame_bytes)
+                if not isinstance(frame, np.ndarray):
+                    frame = np.asarray(frame.convert("RGB"))
+                elif frame.dtype != np.uint8:
+                    frame = (frame.clip(0, 255)).astype(np.uint8)
                 writer.append_data(frame)
             writer.close()
 
