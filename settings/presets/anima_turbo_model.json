@@ -1,0 +1,12 @@
+{
+  "name": "Anima Turbo 1.0 (Official)",
+  "description": "Official Draw Things preset for the dedicated Anima Turbo model (turbo behavior built in, no LoRA needed)",
+  "base_resolution": 1024,
+  "clip_skip": 1,
+  "recommended_steps": 8,
+  "recommended_cfg": 1.0,
+  "sampler": "DDIM Trailing",
+  "shift": 3.16,
+  "resolution_dependent_shift": true,
+  "notes": "Dedicated turbo model (anima_turbo_1.0_f16.ckpt / _i8x.ckpt per catalog: default_scale 16). Verified working: 8 steps, CFG 1.0, DDIM Trailing, shift 3.16. Prefer this over base+turbo-LoRA on servers that lack the anima_turbo LoRA file. Model: https://huggingface.co/circlestone-labs/Anima"
+}

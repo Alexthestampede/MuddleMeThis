@@ -1,0 +1,27 @@
+{
+  "name": "MiniMax H3 Turbo LoRA (Recommended)",
+  "description": "MiniMax H3 with 3-step turbo LoRA for fast video generation",
+  "base_resolution": 832,
+  "clip_skip": 1,
+  "recommended_steps": 6,
+  "recommended_cfg": 1.0,
+  "sampler": "DDIM Trailing",
+  "shift": 6.0,
+  "num_frames": 39,
+  "width": 832,
+  "height": 512,
+  "tiled_decoding": true,
+  "decoding_tile_width": 256,
+  "decoding_tile_height": 256,
+  "decoding_tile_overlap": 64,
+  "shift_for_audio": 3.0,
+  "uses_sol_attention": false,
+  "sol_attention_start": 2,
+  "sol_attention_tau": 0.5,
+  "color_calibration": "none",
+  "compression_artifacts": "disabled",
+  "loras": [
+    {"file": "taomate_h3_3step_comfyui_lora_f16.ckpt", "weight": 1.0}
+  ],
+  "notes": "RECOMMENDED video variant: turbo LoRA cuts 50 steps to 6 and frames 124 to 39. Bundled LoRA applies automatically. Tiled decoding ON (256px tiles, 64px overlap). Not yet testable server-side."
+}

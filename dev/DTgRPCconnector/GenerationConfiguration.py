@@ -103,13 +103,69 @@ class GenerationConfiguration(object):
             return self._tab.Get(flatbuffers.number_types.Uint32Flags, o + self._tab.Pos)
         return 1
 
+    # Slot 84: compression_artifacts (CompressionMethod byte, default Disabled)
+    def CompressionArtifacts(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(172))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Uint8Flags, o + self._tab.Pos)
+        return 0
+
+    # Slot 85: compression_artifacts_quality (float, default 43.1)
+    def CompressionArtifactsQuality(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(174))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Float32Flags, o + self._tab.Pos)
+        return 43.1
+
+    # Slot 86: color_calibration (ColorCalibration byte, default Disabled)
+    def ColorCalibration(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(176))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Uint8Flags, o + self._tab.Pos)
+        return 0
+
+    # Slot 87: expand_prompt_to_json (bool, default false)
+    def ExpandPromptToJson(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(178))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.BoolFlags, o + self._tab.Pos)
+        return False
+
+    # Slot 88: shift_for_audio (float, default 3.0)
+    def ShiftForAudio(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(180))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Float32Flags, o + self._tab.Pos)
+        return 3.0
+
+    # Slot 89: uses_sol_attention (bool, default false)
+    def UsesSolAttention(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(182))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.BoolFlags, o + self._tab.Pos)
+        return False
+
+    # Slot 90: sol_attention_start (int, default 2)
+    def SolAttentionStart(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(184))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Int32Flags, o + self._tab.Pos)
+        return 2
+
+    # Slot 91: sol_attention_tau (float, default 0.5)
+    def SolAttentionTau(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(186))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Float32Flags, o + self._tab.Pos)
+        return 0.5
+
 
 # ============================================================================
-# Field count: 84 fields total (slots 0-83) matching config.fbs
+# Field count: 92 fields total (slots 0-91) matching config.fbs
 # ============================================================================
 
 def GenerationConfigurationStart(builder):
-    builder.StartObject(84)
+    builder.StartObject(92)
 
 def Start(builder):
     GenerationConfigurationStart(builder)
@@ -741,3 +797,49 @@ def GenerationConfigurationAddCompressionArtifactsQuality(builder, compressionAr
 
 def AddCompressionArtifactsQuality(builder, compressionArtifactsQuality):
     GenerationConfigurationAddCompressionArtifactsQuality(builder, compressionArtifactsQuality)
+
+# --- Slot 86: color_calibration (ColorCalibration byte, default Disabled) ---
+# ColorCalibration enum: Disabled=0, Lab=1
+COLOR_CALIBRATION_DISABLED = 0
+COLOR_CALIBRATION_LAB = 1
+
+def GenerationConfigurationAddColorCalibration(builder, colorCalibration):
+    builder.PrependUint8Slot(86, colorCalibration, 0)
+
+def AddColorCalibration(builder, colorCalibration):
+    GenerationConfigurationAddColorCalibration(builder, colorCalibration)
+
+# --- Slot 87: expand_prompt_to_json (bool, default false) ---
+def GenerationConfigurationAddExpandPromptToJson(builder, expandPromptToJson):
+    builder.PrependBoolSlot(87, expandPromptToJson, 0)
+
+def AddExpandPromptToJson(builder, expandPromptToJson):
+    GenerationConfigurationAddExpandPromptToJson(builder, expandPromptToJson)
+
+# --- Slot 88: shift_for_audio (float, default 3.0) ---
+def GenerationConfigurationAddShiftForAudio(builder, shiftForAudio):
+    builder.PrependFloat32Slot(88, shiftForAudio, 3.0)
+
+def AddShiftForAudio(builder, shiftForAudio):
+    GenerationConfigurationAddShiftForAudio(builder, shiftForAudio)
+
+# --- Slot 89: uses_sol_attention (bool, default false) ---
+def GenerationConfigurationAddUsesSolAttention(builder, usesSolAttention):
+    builder.PrependBoolSlot(89, usesSolAttention, 0)
+
+def AddUsesSolAttention(builder, usesSolAttention):
+    GenerationConfigurationAddUsesSolAttention(builder, usesSolAttention)
+
+# --- Slot 90: sol_attention_start (int, default 2) ---
+def GenerationConfigurationAddSolAttentionStart(builder, solAttentionStart):
+    builder.PrependInt32Slot(90, solAttentionStart, 2)
+
+def AddSolAttentionStart(builder, solAttentionStart):
+    GenerationConfigurationAddSolAttentionStart(builder, solAttentionStart)
+
+# --- Slot 91: sol_attention_tau (float, default 0.5) ---
+def GenerationConfigurationAddSolAttentionTau(builder, solAttentionTau):
+    builder.PrependFloat32Slot(91, solAttentionTau, 0.5)
+
+def AddSolAttentionTau(builder, solAttentionTau):
+    GenerationConfigurationAddSolAttentionTau(builder, solAttentionTau)

@@ -122,6 +122,60 @@ def save_tensor_image(data: bytes, filename: str):
     print(f"✅ Saved to {filename}")
     return img
 
+def decode_audio_tensor(data: bytes) -> Tuple[np.ndarray, int, int]:
+    """
+    Decode Draw Things audio tensor format to interleaved float32 PCM samples.
+    
+    Audio arrives as fpzip-compressed CCV tensors of shape (channels, samples)
+    — e.g. (2, N) for stereo — with float values in [-1.0, +1.0], exactly like
+    image tensors. This mirrors the upstream Swift client, which reads
+    Tensor<Float> from response.generatedAudio via Tensor(data:using:[.zip, .fpzip]).
+    
+    Args:
+        data: Raw tensor data from ImageGenerationResponse.generatedAudio
+        
+    Returns:
+        Tuple of (pcm_bytes, channels, sample_count)
+        pcm_bytes is interleaved 32-bit little-endian float PCM,
+        ready to be piped to ffmpeg as `-f f32le -ac channels`.
+    """
+    header = struct.unpack_from('<32I', data, 0)
+    magic = header[0]
+    height = header[6]   # channels for audio tensors
+    width = header[7]    # sample count
+    channels = header[8]
+    
+    is_compressed = (magic == MAGIC_COMPRESSED)
+    
+    if is_compressed:
+        if not FPZIP_AVAILABLE:
+            raise RuntimeError("Audio tensor is compressed but fpzip is not available")
+        compressed_data = data[HEADER_SIZE:]
+        float_data = fpzip.decompress(compressed_data, order='C')
+        if float_data.ndim == 2:
+            float_data = float_data[None, ...]  # add batch dim
+    else:
+        raise ValueError(
+            "Audio tensor is not fpzip-compressed; uncompressed audio is not expected "
+            "from the server. If this is intentional, decoding must be added for "
+            f"header layout {header[:9]}."
+        )
+    
+    # Normalize to (channels, samples)
+    if float_data.ndim == 4:
+        # (batch, channels, samples, 1) or similar — squeeze trailing dims
+        float_data = np.squeeze(float_data)
+    if float_data.ndim == 1:
+        float_data = float_data[None, :]  # mono
+    
+    n_channels, n_samples = float_data.shape[0], float_data.shape[1]
+    
+    # Interleave channels: (channels, samples) -> (samples, channels)
+    interleaved = float_data.T.reshape(-1)
+    interleaved = np.clip(interleaved, -1.0, 1.0).astype(np.float32)
+    
+    return interleaved.tobytes(), n_channels, n_samples
+
 if __name__ == '__main__':
     # Test with our generated image
     import sys

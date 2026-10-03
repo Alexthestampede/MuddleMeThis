@@ -1802,6 +1802,7 @@ def generate_video(
             hires_fix_start_width=hires_fix_width // 64,
             hires_fix_start_height=hires_fix_height // 64,
             hires_fix_strength=hires_fix_strength,
+            shift_for_audio=3.0 if is_ltx else 0.0,
         )
 
         status = (

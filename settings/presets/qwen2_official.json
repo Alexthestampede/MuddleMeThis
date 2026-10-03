@@ -1,0 +1,12 @@
+{
+  "name": "Qwen Image 2.1 (Official)",
+  "description": "Official Draw Things preset for Qwen Image 2.1",
+  "base_resolution": 1024,
+  "clip_skip": 1,
+  "recommended_steps": 40,
+  "recommended_cfg": 1.0,
+  "sampler": "DDIM Trailing",
+  "shift": 2.0008025,
+  "resolution_dependent_shift": true,
+  "notes": "Official DT settings for qwen_image_2.1_i4x.ckpt: 40 steps, CFG 1.0, DDIM Trailing, shift 2.0 with resolution-dependent shift. Not yet testable server-side."
+}
