@@ -24,8 +24,8 @@ from datetime import datetime
 
 import numpy as np
 
-# Application version
-APP_VERSION = "1.0.0"
+# Application version (calendar-based, like dtline: YYYYMMDD.release)
+APP_VERSION = "20261003.1"
 
 # Suppress gRPC SSL handshake warnings (these are harmless when using self-signed certs)
 os.environ["GRPC_VERBOSITY"] = "ERROR"

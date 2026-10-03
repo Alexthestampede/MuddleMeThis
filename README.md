@@ -2,7 +2,7 @@
 
 AI-powered prompt engineering and image generation workbench. Connect vision-enabled LLMs (LM Studio, Ollama) with Draw Things gRPC server for intelligent prompt manipulation and high-quality image generation.
 
-![Version](https://img.shields.io/badge/version-1.0.0-blue)
+![Version](https://img.shields.io/badge/version-20261003.1-blue)
 ![Python](https://img.shields.io/badge/python-3.8+-green)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 

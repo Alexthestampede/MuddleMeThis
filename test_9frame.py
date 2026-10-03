@@ -62,6 +62,7 @@ if result.audio:
         output_path="outputs/test_121frame.mp4",
         fps=25,
         audio=audio_bytes,
+        audio_sample_rate=48000,
         frame_decoder=tensor_to_pil,
     )
     print(f"Saved: {out}")
