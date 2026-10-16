@@ -1955,6 +1955,25 @@ def edit_image(
         # Translate display name to actual filename
         model_file = state.model_name_to_file.get(model, model)
 
+        # Edit/kontext models require strength=1.0 (lower corrupts the reference
+        # encoding). Detect by display-name keywords OR by the server metadata
+        # 'modifier' field — "Qwen Image 2.1" is a kontext model whose name has
+        # no edit keyword (ported from dtline 20261016.1).
+        edit_keywords = ("klein", "kontext", "edit", "instruct", "pix2pix")
+        is_edit_model = any(k in model.lower() for k in edit_keywords)
+        if not is_edit_model:
+            try:
+                model_info = state.grpc_metadata.get_model_info(model_file)
+                modifier = str(model_info.get("modifier", "")).lower() if model_info else ""
+                is_edit_model = any(k in modifier for k in edit_keywords)
+            except Exception:
+                pass
+        if is_edit_model and strength != 1.0:
+            strength = 1.0
+            status_extra = "\n🔒 Edit model detected — strength forced to 1.0\n"
+        else:
+            status_extra = ""
+
         status = f"🎨 Editing image...\n\n"
         status += f"📝 Instruction: {instruction}\n"
         status += f"🤖 Model: {model}\n"
@@ -1962,6 +1981,8 @@ def edit_image(
         status += f"🎲 Sampler: {sampler_name}\n"
         status += f"💪 Strength: {strength}\n"
         status += f"📐 Input: {original_size[0]}×{original_size[1]} pixels\n"
+        if status_extra:
+            status += status_extra
 
         # Cap to max resolution (edit models work at 1024-1536px, not 4K)
         MAX_EDIT_PIXELS = 2048

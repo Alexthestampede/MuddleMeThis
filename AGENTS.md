@@ -61,6 +61,7 @@ TLS is the default. Self-signed certs need the localhost name override — alrea
 - FLUX: clip_skip=1, shift=1.0, use `guidance_embed` not cfg_scale
 - Chroma: clip_skip=2 (per official raw preset)
 - LTX 2.3 distilled: steps=8, cfg=1.0, shift=5, TCD Trailing (sampler id 19)
+- **Qwen Image 2.1 (+Turbo)**: steps 40 (base) / 8 (turbo `qwen_image_2.1_turbo_i4x`), cfg=1.0, DDIM Trailing, 1536×1536. Base uses shift=1 + resolutionDependentShift; turbo uses shift=6.5 — **but not from the same preset file** (`qwen2_official` vs `qwen21_turbo`). The Edit-tab strength=1.0 force covers it via server metadata `modifier='kontext'` even though the name has no edit keyword.
 
 ## Testing
 

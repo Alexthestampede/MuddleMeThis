@@ -1,12 +1,14 @@
 {
   "name": "Qwen Image 2.1 (Official)",
   "description": "Official Draw Things preset for Qwen Image 2.1",
-  "base_resolution": 1024,
+  "base_resolution": 1536,
   "clip_skip": 1,
   "recommended_steps": 40,
   "recommended_cfg": 1.0,
   "sampler": "DDIM Trailing",
-  "shift": 2.0008025,
+  "shift": 1.0,
   "resolution_dependent_shift": true,
-  "notes": "Official DT settings for qwen_image_2.1_i4x.ckpt: 40 steps, CFG 1.0, DDIM Trailing, shift 2.0 with resolution-dependent shift. Not yet testable server-side."
+  "width": 1536,
+  "height": 1536,
+  "notes": "Official DT settings for qwen_image_2.1_q8p.ckpt at 1536x1536: 40 steps, CFG 1.0, DDIM Trailing, shift 1 with resolution-dependent shift. Also an edit/kontext-capable model (reference-image editing, native transparency) \u2014 dtline edit forces strength=1.0. Model: https://huggingface.co/Qwen/Qwen-Image-2.1"
 }
