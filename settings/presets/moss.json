@@ -1,0 +1,13 @@
+{
+  "name": "MOSS (Official)",
+  "description": "Official Draw Things preset for MOSS Image SFT",
+  "base_resolution": 1024,
+  "clip_skip": 1,
+  "recommended_steps": 30,
+  "recommended_cfg": 3.0,
+  "sampler": "DDIM Trailing",
+  "shift": 5.0,
+  "width": 1024,
+  "height": 1024,
+  "notes": "Official DT settings for moss_image_sft_i4x.ckpt: 30 steps, CFG 3.0 (guidance-distilled, unlike the usual CFG 1.0 turbo models), DDIM Trailing, shift 5.0. Not yet in the community-models catalog (new model) - no official recommendation note to cross-check."
+}

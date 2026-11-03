@@ -32,7 +32,7 @@ Access: http://localhost:7860
 - `app.py` — Main Gradio app (~3500 lines). Video tab wired near the end (`create_ui`).
 - `settings_manager.py` — Config persistence (JSON).
 - `dev/DTgRPCconnector/` — gRPC client. **Canonical copy synced from dtline repo (calendar-versioned, v26.0910.1+)**. `drawthings_client.py` (client + audio muxing), `tensor_decoder.py` (`tensor_to_pil`, `decode_audio_tensor`), `GenerationConfiguration.py` (FlatBuffer schema; slots 86+ = newer server fields).
-- `dev/ModuLLe/` — LLM provider abstraction (Ollama/LM Studio).
+- `dev/ModuLLe/` — LLM provider abstraction (Ollama/LM Studio/OpenAI/Gemini/Claude), synced from github.com/Alexthestampede/ModuLLe (calendar-versioned). Editable install; its pyproject pulls `beautifulsoup4`, `html2text`, `ddgs`, `lxml` for web/tools modules (`modulle/__init__` imports lazily, so the app works without them).
 - `settings/config.json` — User settings (gitignored, auto-created); reference: `config.example.json`.
 - `settings/presets/*.json` — Model presets. **Our schema stores Draw Things keys** (`guidanceScale`, `hiresFix`, `resolutionDependentShift`) — dtline uses different keys (`recommended_cfg`, `hires_fix`); don't mix.
 - `settings/prompts/*.txt` — System prompts (expand.txt, extract.txt, refine.txt).
@@ -62,6 +62,8 @@ TLS is the default. Self-signed certs need the localhost name override — alrea
 - Chroma: clip_skip=2 (per official raw preset)
 - LTX 2.3 distilled: steps=8, cfg=1.0, shift=5, TCD Trailing (sampler id 19)
 - **Qwen Image 2.1 (+Turbo)**: steps 40 (base) / 8 (turbo `qwen_image_2.1_turbo_i4x`), cfg=1.0, DDIM Trailing, 1536×1536. Base uses shift=1 + resolutionDependentShift; turbo uses shift=6.5 — **but not from the same preset file** (`qwen2_official` vs `qwen21_turbo`). The Edit-tab strength=1.0 force covers it via server metadata `modifier='kontext'` even though the name has no edit keyword.
+- **FLUX.3 Klein 5.6B**: 16 steps, CFG 1.0, shift 16 (distilled); `*_base` variant = 50 steps, CFG 4.0, shift 16. **Export quirk**: the non-Base app export references the *base* checkpoint with distilled settings — check the filename before trusting step counts. Both are kontext edit models.
+- **MOSS Image SFT** (`moss_image_sft_i4x`): 30 steps, **CFG 3.0** (guidance-distilled — unlike the usual CFG 1.0 turbo models), DDIM Trailing, shift 5.0.
 
 ## Testing
 

@@ -1,0 +1,13 @@
+{
+  "name": "FLUX.3 Klein 5.6B (Official)",
+  "description": "Official Draw Things preset captured for FLUX.3 klein 5.6B",
+  "base_resolution": 1024,
+  "clip_skip": 1,
+  "recommended_steps": 16,
+  "recommended_cfg": 1.0,
+  "sampler": "DDIM Trailing",
+  "shift": 16.0,
+  "width": 1024,
+  "height": 1024,
+  "notes": "Captured from the app's 'Flux 3 Klein 5.6 Official' export: flux_3_klein_base_i4x.ckpt, 16 steps, CFG 1.0, shift 16. NOTE: the export references the BASE file with distilled-style settings; the catalog says flux_3_klein_* (distilled) is the 16-step/CFG-1 variant and *_base is undistilled (50 steps, CFG 4). kontext edit model (strength forced 1.0 by dtline edit). Catalog: flux_3_klein_i4x/i8x/q8p."
+}

@@ -1,9 +1,14 @@
 """
 Base Ollama client for RSS Feed Processor
 """
+
+from typing import Any, Dict, List, Optional
+
 import requests
-from modulle.utils.logging_config import get_logger
+
 from modulle.config import OLLAMA_BASE_URL, REQUEST_TIMEOUT
+from modulle.utils.logging_config import get_logger
+from modulle.utils.response_cleaner import clean_response
 
 logger = get_logger(__name__.replace("modulle.providers.", ""))
 
@@ -13,15 +18,30 @@ class OllamaClient:
     Base client for interacting with Ollama API.
     """
 
-    def __init__(self, base_url=OLLAMA_BASE_URL):
+    def __init__(
+        self,
+        base_url=OLLAMA_BASE_URL,
+        request_timeout: Optional[int] = None,
+        api_key: Optional[str] = None,
+    ):
         """
         Initialize Ollama client.
 
         Args:
-            base_url: Ollama server base URL
+            base_url: Ollama server base URL (local server or https://ollama.com)
+            request_timeout: Timeout in seconds for API requests.
+                Generation calls use 3x this value. Defaults to the
+                REQUEST_TIMEOUT config value (MODULLE_REQUEST_TIMEOUT env var)
+                when not provided.
+            api_key: API key for Ollama Cloud (https://ollama.com). When set,
+                an 'Authorization: Bearer <key>' header is sent with every
+                request. Unneeded for local servers.
         """
-        self.base_url = base_url.rstrip('/')
+        self.base_url = base_url.rstrip("/")
         self.api_url = f"{self.base_url}/api"
+        self.request_timeout = request_timeout or REQUEST_TIMEOUT
+        self.api_key = api_key
+        self._headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
     def health_check(self):
         """
@@ -31,7 +51,7 @@ class OllamaClient:
             True if server is available, False otherwise
         """
         try:
-            response = requests.get(f"{self.base_url}/api/tags", timeout=5)
+            response = requests.get(f"{self.base_url}/api/tags", timeout=5, headers=self._headers)
             response.raise_for_status()
             logger.info("Ollama server is available")
             return True
@@ -47,10 +67,12 @@ class OllamaClient:
             List of model names, or empty list on error
         """
         try:
-            response = requests.get(f"{self.api_url}/tags", timeout=REQUEST_TIMEOUT)
+            response = requests.get(
+                f"{self.api_url}/tags", timeout=self.request_timeout, headers=self._headers
+            )
             response.raise_for_status()
             data = response.json()
-            models = [model['name'] for model in data.get('models', [])]
+            models = [model["name"] for model in data.get("models", [])]
             logger.info(f"Available models: {models}")
             return models
         except requests.exceptions.RequestException as e:
@@ -76,9 +98,7 @@ class OllamaClient:
                 "model": model,
                 "prompt": prompt,
                 "stream": False,
-                "options": {
-                    "temperature": temperature
-                }
+                "options": {"temperature": temperature},
             }
 
             if system:
@@ -91,23 +111,24 @@ class OllamaClient:
             response = requests.post(
                 f"{self.api_url}/generate",
                 json=payload,
-                timeout=REQUEST_TIMEOUT * 3  # Longer timeout for generation
+                timeout=self.request_timeout * 3,  # Generation needs longer than health/list calls
+                headers=self._headers,
             )
 
             # Check for errors and try to get detailed error message from Ollama
             if not response.ok:
                 try:
                     error_data = response.json()
-                    error_msg = error_data.get('error', f"HTTP {response.status_code}")
+                    error_msg = error_data.get("error", f"HTTP {response.status_code}")
                     logger.error(f"Ollama generation failed: {error_msg}")
                 except Exception:
                     logger.error(f"Ollama generation failed: HTTP {response.status_code}")
                 return None
 
             data = response.json()
-            generated_text = data.get('response', '').strip()
+            generated_text = clean_response(data.get("response", ""))
 
-            logger.debug(f"Generated {len(generated_text)} characters")
+            logger.debug(f"Generated {len(generated_text or '')} characters")
             return generated_text
 
         except requests.exceptions.RequestException as e:
@@ -134,33 +155,32 @@ class OllamaClient:
                 "model": model,
                 "messages": messages,
                 "stream": False,
-                "options": {
-                    "temperature": temperature
-                }
+                "options": {"temperature": temperature},
             }
 
             logger.debug(f"Sending chat request to Ollama model: {model}")
             response = requests.post(
                 f"{self.api_url}/chat",
                 json=payload,
-                timeout=REQUEST_TIMEOUT * 3
+                timeout=self.request_timeout * 3,
+                headers=self._headers,
             )
 
             # Check for errors and try to get detailed error message from Ollama
             if not response.ok:
                 try:
                     error_data = response.json()
-                    error_msg = error_data.get('error', f"HTTP {response.status_code}")
+                    error_msg = error_data.get("error", f"HTTP {response.status_code}")
                     logger.error(f"Ollama chat failed: {error_msg}")
                 except Exception:
                     logger.error(f"Ollama chat failed: HTTP {response.status_code}")
                 return None
 
             data = response.json()
-            message = data.get('message', {})
-            content = message.get('content', '').strip()
+            message = data.get("message", {})
+            content = clean_response(message.get("content", ""))
 
-            logger.debug(f"Generated {len(content)} characters")
+            logger.debug(f"Generated {len(content or '')} characters")
             return content
 
         except requests.exceptions.RequestException as e:
@@ -169,3 +189,316 @@ class OllamaClient:
         except Exception as e:
             logger.error(f"Unexpected error in Ollama chat: {e}")
             return None
+
+    def chat_with_tools(
+        self,
+        model: str,
+        messages: List[Dict[str, Any]],
+        tools: List[Dict[str, Any]],
+        temperature: float = 0.7,
+    ) -> Dict[str, Any]:
+        """
+        Chat with tool calling support.
+
+        Ollama supports tool calling in compatible models. The model can
+        choose to call tools, and the results can be fed back into the
+        conversation.
+
+        Args:
+            model: Model name to use (must support tool calling)
+            messages: List of message dicts with 'role' and 'content'
+            tools: List of tool definitions in Ollama format
+            temperature: Generation temperature
+
+        Returns:
+            Dict with keys:
+                - 'content': Generated text (if any)
+                - 'tool_calls': List of tool calls (if model wants to call tools)
+                - 'finish_reason': Why generation stopped ('stop' or 'tool_calls')
+                - 'message': Full message dict from Ollama
+
+        Example:
+            >>> tools = [{"type": "function", "function": {...}}]
+            >>> result = client.chat_with_tools(model, messages, tools)
+            >>> if result['tool_calls']:
+            ...     for call in result['tool_calls']:
+            ...         # Execute tool and add result to messages
+            ...         pass
+        """
+        try:
+            payload = {
+                "model": model,
+                "messages": messages,
+                "tools": tools,
+                "stream": False,
+                "options": {"temperature": temperature},
+            }
+
+            logger.debug(f"Sending chat with tools request to Ollama model: {model}")
+            logger.debug(f"Available tools: {[t['function']['name'] for t in tools]}")
+
+            response = requests.post(
+                f"{self.api_url}/chat",
+                json=payload,
+                timeout=self.request_timeout * 3,
+                headers=self._headers,
+            )
+
+            # Check for errors
+            if not response.ok:
+                try:
+                    error_data = response.json()
+                    error_msg = error_data.get("error", f"HTTP {response.status_code}")
+                    logger.error(f"Ollama chat with tools failed: {error_msg}")
+                except Exception:
+                    logger.error(f"Ollama chat with tools failed: HTTP {response.status_code}")
+                return {
+                    "content": None,
+                    "tool_calls": [],
+                    "finish_reason": "error",
+                    "message": None,
+                }
+
+            data = response.json()
+            message = data.get("message", {})
+            # Cloud responses may return content as null/whitespace when the
+            # model emits only tool calls; guard len() below.
+            content = clean_response(message.get("content") or "")
+            tool_calls_raw = message.get("tool_calls", [])
+
+            # Parse tool calls
+            tool_calls = []
+            if tool_calls_raw:
+                logger.debug(f"Model requested {len(tool_calls_raw)} tool call(s)")
+                for tc in tool_calls_raw:
+                    function = tc.get("function", {})
+                    tool_calls.append(
+                        {
+                            "id": tc.get("id", f"call_{len(tool_calls)}"),
+                            "name": function.get("name", ""),
+                            "arguments": function.get("arguments", {}),
+                        }
+                    )
+
+            # Determine finish reason
+            finish_reason = "tool_calls" if tool_calls else "stop"
+
+            logger.debug(
+                f"Generated {len(content or '')} characters, finish_reason: {finish_reason}"
+            )
+
+            return {
+                "content": content if content else None,
+                "tool_calls": tool_calls,
+                "finish_reason": finish_reason,
+                "message": message,
+            }
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Ollama chat with tools failed: {e}")
+            return {"content": None, "tool_calls": [], "finish_reason": "error", "message": None}
+        except Exception as e:
+            logger.error(f"Unexpected error in Ollama chat with tools: {e}")
+            return {"content": None, "tool_calls": [], "finish_reason": "error", "message": None}
+
+    def system_one(
+        self,
+        model: str,
+        state: Any,
+        questions: Dict[str, Dict[str, Any]],
+        images: Optional[List[str]] = None,
+        keep_alive: Optional[str] = None,
+        timeout: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Decision-model API (e.g. clef / clef-flash) via Ollama's /v1/systemone endpoint.
+
+        Decision models score every option of every question jointly in a single
+        non-autoregressive pass. Requires Ollama >= 0.35.1.
+
+        Args:
+            model: Model name to use (e.g. 'clef-flash')
+            state: Text (or JSON-serializable object/array) to judge
+            questions: Dict of 1-64 named questions. Each question needs a 'type'
+                ('noul', 'choice', or 'score'), 'instructions', and usually
+                'criteria' (choice: option->description, 2-26 options;
+                score: list of level descriptions lowest-first, 2-26 levels;
+                noul: optionally {"true": "...", "false": "..."})
+            images: Optional list of base64-encoded PNG/JPEG/WebP images shared
+                by all questions (URLs and data URLs are not supported)
+            keep_alive: Optional keep-alive duration for the model
+            timeout: Request timeout in seconds (defaults to request_timeout * 3)
+
+        Returns:
+            Dict with keys:
+                - 'model': Model name
+                - 'answers': Dict mapping each question name to its typed answer
+                    (noul: {'type', 'noul'}, choice: {'type', 'choice',
+                    'probabilities', 'confidence'}, score: {'type', 'score',
+                    'legend', 'probabilities', 'confidence'})
+                - 'usage': Token usage dict
+
+            None on error.
+
+        Example:
+            >>> result = client.system_one(
+            ...     model='clef-flash',
+            ...     state='Checkout failing for all customers',
+            ...     questions={
+            ...         'urgent': {'type': 'noul', 'instructions': 'Is this urgent?'},
+            ...         'team': {'type': 'choice', 'instructions': 'Which team?',
+            ...                  'criteria': {'billing': 'Payments', 'technical': 'Outages'}}
+            ...     }
+            ... )
+            >>> result['answers']['team']['choice']
+            'technical'
+        """
+        try:
+            payload: Dict[str, Any] = {"model": model, "state": state, "questions": questions}
+
+            if images:
+                payload["images"] = images
+            if keep_alive:
+                payload["keep_alive"] = keep_alive
+
+            logger.debug(f"Sending systemone request to decision model: {model}")
+            response = requests.post(
+                f"{self.base_url}/v1/systemone",
+                json=payload,
+                timeout=timeout if timeout is not None else self.request_timeout * 3,
+                headers=self._headers,
+            )
+
+            # Check for errors and try to get detailed error message from Ollama
+            if not response.ok:
+                try:
+                    error_data = response.json()
+                    error_msg = error_data.get("error", f"HTTP {response.status_code}")
+                    logger.error(f"Ollama systemone failed: {error_msg}")
+                except Exception:
+                    logger.error(f"Ollama systemone failed: HTTP {response.status_code}")
+                return None
+
+            data = response.json()
+            answers = data.get("answers", {})
+            logger.debug(f"Got {len(answers)} answer(s) from decision model")
+            return data
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Ollama systemone failed: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error in Ollama systemone: {e}")
+            return None
+
+    def speech(
+        self,
+        model: str,
+        text: str,
+        voice: str = "default",
+        response_format: str = "wav",
+        timeout: Optional[int] = None,
+    ) -> Optional[bytes]:
+        """
+        Generate speech audio from text (text-to-speech).
+
+        Uses Ollama's OpenAI-compatible ``/v1/audio/speech`` endpoint.
+        Requires a speech-capable model (e.g. ``phonon``) and Ollama >= 0.40.9.
+        Speech models can be used for nothing else: chat/completion requests
+        to them return a 400 error.
+
+        Args:
+            model: Speech model name (e.g. 'phonon')
+            text: Text to speak (max 4096 characters per request; see
+                ``OllamaSpeechProcessor`` for automatic chunking)
+            voice: Voice name (case-insensitive). 'default' uses the
+                checkpoint's own voice; ``list_voices()`` lists options.
+            response_format: 'wav' (16-bit mono 24 kHz) or 'pcm'
+                (raw 16-bit little-endian, mono, 24 kHz, no header)
+            timeout: Request timeout in seconds (defaults to
+                request_timeout * 3)
+
+        Returns:
+            Audio bytes, or None on error.
+
+        Example:
+            >>> audio = client.speech(model='phonon', text='Hello world')
+            >>> open('hello.wav', 'wb').write(audio)
+        """
+        if response_format not in ("wav", "pcm"):
+            raise ValueError("response_format must be 'wav' or 'pcm'")
+
+        try:
+            payload = {
+                "model": model,
+                "input": text,
+                "voice": voice,
+                "response_format": response_format,
+            }
+
+            logger.debug(f"Sending speech request to Ollama model: {model} ({voice})")
+            response = requests.post(
+                f"{self.base_url}/v1/audio/speech",
+                json=payload,
+                timeout=timeout if timeout is not None else self.request_timeout * 3,
+                headers=self._headers,
+            )
+
+            if not response.ok:
+                logger.error(f"Ollama speech failed: {_error_message(response)}")
+                return None
+
+            logger.debug(f"Generated {len(response.content)} bytes of audio")
+            return response.content
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Ollama speech failed: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error in Ollama speech: {e}")
+            return None
+
+    def list_voices(self, model: str) -> List[str]:
+        """
+        List the voices a speech model supports (via /api/show).
+
+        Args:
+            model: Speech model name (e.g. 'phonon')
+
+        Returns:
+            List of voice names, or an empty list on error.
+        """
+        try:
+            response = requests.post(
+                f"{self.api_url}/show",
+                json={"model": model},
+                timeout=self.request_timeout,
+                headers=self._headers,
+            )
+            if not response.ok:
+                logger.error(f"Ollama show failed: {_error_message(response)}")
+                return []
+            data = response.json()
+            voices = data.get("voices") or []
+            return list(voices)
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to list voices for {model}: {e}")
+            return []
+        except Exception as e:
+            logger.error(f"Unexpected error listing voices: {e}")
+            return []
+
+
+def _error_message(response) -> str:
+    """Extract a human-readable error from an Ollama/OpenAI-style response."""
+    try:
+        data = response.json()
+    except Exception:
+        return f"HTTP {response.status_code}"
+    if isinstance(data, dict):
+        error = data.get("error")
+        if isinstance(error, dict):
+            return error.get("message") or f"HTTP {response.status_code}"
+        if isinstance(error, str):
+            return error
+    return f"HTTP {response.status_code}"

@@ -1,0 +1,13 @@
+{
+  "name": "FLUX.3 Klein 5.6B Base (Official)",
+  "description": "Official Draw Things preset for FLUX.3 klein 5.6B Base (undistilled)",
+  "base_resolution": 1024,
+  "clip_skip": 1,
+  "recommended_steps": 50,
+  "recommended_cfg": 4.0,
+  "sampler": "DDIM Trailing",
+  "shift": 16.0,
+  "width": 1024,
+  "height": 1024,
+  "notes": "Undistilled base checkpoint: 50 steps, CFG 4.0, shift 16 (catalog: trained without step or guidance distillation; intended for fine-tuning/LoRA training). kontext edit model (strength forced 1.0 by dtline edit). Export referenced flux_3_klein_base_q8p.ckpt; on servers with only the i4x build the resolver matches it by file core."
+}

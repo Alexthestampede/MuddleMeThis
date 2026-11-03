@@ -16,6 +16,9 @@ You build your application logic (summarization, translation, classification, et
 - **Ollama** - Run LLMs locally
 - **LM Studio** - User-friendly local LLM server
 
+### Ollama Cloud (API-based)
+- **Ollama Cloud** - Same API, remote models via [ollama.com](https://ollama.com) (API key from [ollama.com/settings/keys](https://ollama.com/settings/keys))
+
 ### Cloud (API-based)
 - **OpenAI** - GPT-4o, GPT-4o-mini, etc.
 - **Google Gemini** - Gemini 1.5 Flash/Pro
@@ -170,6 +173,9 @@ Change providers by changing **one parameter**:
 # Development: Use free local Ollama
 _, processor, _ = create_ai_client('ollama', text_model='llama2')
 
+# Ollama Cloud: remote models, no local install (OLLAMA_API_KEY env var or key param)
+_, processor, _ = create_ai_client('ollama_cloud', text_model='glm-5.3-flash', api_key='...')
+
 # Production: Switch to OpenAI (same API!)
 _, processor, _ = create_ai_client('openai', text_model='gpt-4o-mini', api_key='...')
 
@@ -255,6 +261,10 @@ See `.modulle.json.example` in the repository for a complete example with all pr
 export OLLAMA_BASE_URL="http://localhost:11434"
 export OLLAMA_TEXT_MODEL="llama2"
 
+# Ollama Cloud (https://ollama.com - model names without the :cloud suffix, e.g. glm-5.3-flash)
+export OLLAMA_API_KEY="your-api-key"
+export OLLAMA_CLOUD_TEXT_MODEL="glm-5.3-flash"
+
 # OpenAI (cloud)
 export OPENAI_API_KEY="your-api-key"
 export OPENAI_TEXT_MODEL="gpt-4o-mini"
@@ -315,13 +325,52 @@ python basic_usage.py
 python article_summarizer.py
 ```
 
+## ⚡ Decision Models (Ollama)
+
+Ollama decision models like **clef-flash** answer typed questions about a state
+in a single fast pass, via the `system_one()` method on `OllamaClient`
+(requires Ollama >= 0.35.1). They do not use the generic `generate()`/`chat()` API.
+
+```python
+from modulle.providers.ollama import OllamaClient
+
+client = OllamaClient(base_url="http://localhost:11434")
+result = client.system_one(
+    model="clef-flash",
+    state="Checkout has been failing for every customer for the last hour.",
+    questions={"urgent": {"type": "noul", "instructions": "Is this urgent?"}},
+)
+print(result["answers"]["urgent"]["noul"])  # e.g. 0.95
+```
+
+See [docs/DECISION_MODELS.md](docs/DECISION_MODELS.md) for all question types
+(`noul`, `choice`, `score`), image input, and `examples/decision_model.py`.
+
+## 🔊 Speech (Text-to-Speech)
+
+Ollama speech models can turn text into spoken audio through the
+OpenAI-compatible `/v1/audio/speech` endpoint (Ollama >= 0.40.9).
+
+```python
+from modulle import create_speech_processor
+
+speech = create_speech_processor("ollama", model="lfm3-omni")
+speech.speak_to_file("Hello from ModuLLe.", "speech.wav", voice="default")
+print(speech.list_voices())   # 39 voices for lfm3-omni
+```
+
+`lfm3-omni` runs on CPU/GPU; the dedicated `phonon` model requires Apple's
+MLX runtime (Apple Silicon). Long text (> 4,096 chars) is split and stitched
+automatically; output is WAV (16-bit mono 24 kHz) or raw PCM. See
+[docs/SPEECH.md](docs/SPEECH.md) and `examples/speech.py`.
+
 ## 📊 Provider Comparison
 
-| Feature | Ollama | LM Studio | OpenAI | Gemini | Claude |
-|---------|--------|-----------|--------|--------|--------|
-| **Cost** | Free | Free | Paid | Free tier + Paid | Paid |
-| **Privacy** | ✅ Local | ✅ Local | ❌ Cloud | ❌ Cloud | ❌ Cloud |
-| **Internet** | Setup only | Setup only | Required | Required | Required |
+| Feature | Ollama | Ollama Cloud | LM Studio | OpenAI | Gemini | Claude |
+|---------|--------|--------------|-----------|--------|--------|--------|
+| **Cost** | Free | Paid/plan | Free | Paid | Free tier + Paid | Paid |
+| **Privacy** | ✅ Local | ❌ Cloud | ✅ Local | ❌ Cloud | ❌ Cloud | ❌ Cloud |
+| **Internet** | Setup only | Required | Setup only | Required | Required | Required |
 | **Best For** | Privacy, dev | Beginners | Production | Cost-effective | Premium quality |
 
 ## 🔒 Privacy
@@ -340,6 +389,8 @@ python article_summarizer.py
 
 - **README.md** (this file) - API reference
 - **REFACTORING.md** - Design philosophy and refactoring details
+- **docs/DECISION_MODELS.md** - Decision models (clef / clef-flash)
+- **docs/SPEECH.md** - Text-to-speech (Ollama speech models)
 - **examples/README.md** - Example usage guide
 - **examples/article_summarizer.py** - Complete application example
 

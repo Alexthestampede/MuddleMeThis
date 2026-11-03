@@ -86,17 +86,52 @@ class ModelMetadata:
 
         # Determine latent_size based on autoencoder and version
         # latent_size is what to use for the --latent-size parameter
+        # Keys are the `version` strings reported by server metadata
+        # (upstream ModelVersion raw values).
         latent_size_map = {
             # SD 1.5/2.x use 64-pixel latent space
             'v1': 64,
             'v2': 64,
             # SDXL uses 128-pixel latent space
             'sdxl_base_v0.9': 128,
+            'sdxl_refiner_v0.9': 128,
             'sdxl': 128,
-            # FLUX, Z-Image, and Qwen use FLUX-style VAE with 64-pixel latent
+            # FLUX family (FLUX.1/2/3), Z-Image, and Qwen use 64-pixel latents
             'flux1': 64,
+            'flux2': 64,
+            'flux2_9b': 64,
+            'flux2_4b': 64,
+            'flux3_5b': 64,
             'z_image': 64,
             'qwen_image': 64,
+            'qwen_image_2.1': 64,
+            # Other modern image models
+            'ernie_image': 64,
+            'moss_image': 64,
+            'cosmos2.5_2b': 64,
+            'cosmos2.5_2.9b': 64,
+            'ideogram_4': 64,
+            'krea_2': 64,
+            'hidream_i1': 64,
+            'hidream_o1': 64,
+            'seedvr2_3b': 64,
+            'seedvr2_7b': 64,
+            'sd3': 64,
+            'sd3_large': 64,
+            'pixart': 64,
+            'auraflow': 64,
+            'kandinsky2.1': 64,
+            'ssd_1b': 64,
+            # Video models
+            'ltx2': 64,
+            'ltx2.3': 64,
+            'wan_v2.1_1.3b': 64,
+            'wan_v2.1_14b': 64,
+            'wan_v2.2_5b': 64,
+            'hunyuan_video': 64,
+            'svd_i2v': 64,
+            'longcat_video_avatar_v1.5': 64,
+            'minimax_h3': 64,
         }
 
         latent_size = latent_size_map.get(version, 64)
