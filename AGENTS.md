@@ -72,6 +72,8 @@ Ollama unloads models after 5 min idle, so every cold call pays model load + vis
 
 **Every LLM call must cap output** (`llm_max_tokens`, sent as `num_predict`, default 700). Nothing capped generation before, so a small model that started looping echoed the entire instruction block back until it exhausted the context — the "loops the whole context" hang. Extraction/style also run at low temperature (0.2–0.3) and send the instruction file as a **system** prompt, not as the user prompt.
 
+**Shared GPU: release LLM VRAM before generating.** When Ollama and Draw Things run on the same host, a warm model (keep_alive) can hold ~2 GB and Draw Things dies mid-run with `Stream removed (Socket closed)` — verified on .150: generation failed with a model resident, succeeded in 9.4 s right after unloading. `_release_llm_vram()` posts `keep_alive: 0` to `/api/generate` for every model in `/api/ps` before each image/edit/video run, but only when `llm_server` and `grpc_server` share a host (`release_llm_before_generate`, default on).
+
 ### Video models: LTX vs MiniMax H3
 | | LTX 2.3 | MiniMax H3 / FastH3 Omni |
 |---|---|---|

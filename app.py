@@ -351,6 +351,143 @@ def _llm_failure_message(action: str, elapsed: float) -> str:
     )
 
 
+def _release_llm_vram() -> None:
+    """Unload Ollama models before a Draw Things run.
+
+    On a shared machine both processes compete for the same GPU. A warm Ollama
+    model (keep_alive) can hold 1.9 GB+ and make Draw Things die mid-generation
+    with "Stream removed (Socket closed)" - verified on .150: generation failed
+    with a model resident and succeeded in 9.4 s right after unloading.
+
+    Only runs when the LLM and gRPC servers are the same host; ignored
+    otherwise, and all errors are non-fatal.
+    """
+    if not settings.get("release_llm_before_generate", True):
+        return
+    if settings.get("llm_provider", "LM Studio") != "Ollama":
+        return
+
+    import urllib.parse
+    import urllib.request
+
+    llm_url = settings.get("llm_server", "")
+    grpc_server = settings.get("grpc_server", "")
+    llm_host = urllib.parse.urlparse(llm_url).hostname
+    grpc_host = (grpc_server or "").split(":")[0]
+    if not llm_host or llm_host != grpc_host:
+        return  # separate machines, no competition
+
+    base = llm_url.rstrip("/")
+    try:
+        with urllib.request.urlopen(f"{base}/api/ps", timeout=3) as resp:
+            loaded = json.loads(resp.read().decode()).get("models", [])
+    except Exception:
+        return
+
+    for entry in loaded:
+        name = entry.get("name") or entry.get("model")
+        if not name:
+            continue
+        try:
+            req = urllib.request.Request(
+                f"{base}/api/generate",
+                data=json.dumps({"model": name, "keep_alive": 0}).encode(),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            urllib.request.urlopen(req, timeout=3).read()
+            vram = entry.get("size_vram", 0) / 1e9
+            print(f"Released LLM VRAM: {name} ({vram:.1f} GB) before generation")
+        except Exception as e:
+            print(f"Warning: could not unload {name}: {e}")
+
+
+def _friendly_grpc_error(error, server_url: str = "") -> str:
+    """Turn a gRPC failure into something actionable."""
+    text = str(error)
+    details = ""
+    if hasattr(error, "details"):
+        try:
+            details = error.details() or ""
+        except Exception:
+            details = ""
+    blob = f"{text} {details}".lower()
+    server = server_url or settings.get("grpc_server", "localhost:7859")
+
+    if "connection refused" in blob or "failed to connect" in blob:
+        return (
+            f"❌ Draw Things server is not accepting connections ({server}).\n"
+            "Check that Draw Things is running and that the gRPC server is "
+            "enabled (Settings tab → Connect to gRPC Server)."
+        )
+    if "stream removed" in blob or "socket closed" in blob:
+        return (
+            f"❌ The Draw Things server closed the connection mid-run ({server}).\n"
+            "Usual causes: the server exited or ran out of memory on this "
+            "model/resolution, or the network dropped. Try again; if it repeats, "
+            "lower the resolution or use a smaller quantisation.\n"
+            f"Details: {details or text}"
+        )
+    if "deadline" in blob:
+        return f"❌ The generation did not finish before the deadline ({server})."
+    return f"❌ gRPC error: {details or text}"
+
+
+def _grpc_stream_with_retry(start_stream, label: str, attempts: int = 2):
+    """Iterate a gRPC server-stream, rebuilding the channel if it dies.
+
+    A long generation can lose its stream ("Stream removed (Socket closed)")
+    when the server closes the connection - aggressive keepalive pings, a busy
+    server, or WiFi dropping idle TCP. Retrying with a fresh channel is safe
+    because the request is deterministic (same seed), and is far better than
+    losing a multi-minute run.
+    """
+    import grpc as _grpc
+
+    last_error = None
+    for attempt in range(1, attempts + 1):
+        try:
+            yield from start_stream()
+            return
+        except _grpc.RpcError as e:
+            code = e.code() if hasattr(e, "code") else None
+            if code != _grpc.StatusCode.UNAVAILABLE or attempt >= attempts:
+                raise RuntimeError(_friendly_grpc_error(e)) from e
+            last_error = e
+            print(
+                f"Warning: {label} stream dropped (attempt {attempt}/{attempts}): "
+                f"{getattr(e, 'details', lambda: e)()}"
+            )
+            _reconnect_grpc()
+
+
+def _reconnect_grpc():
+    """Rebuild the gRPC channel using the configured server URL."""
+    if not state.grpc_client:
+        return
+    server_url = settings.get("grpc_server", "localhost:7859")
+    root_ca_path = Path(__file__).parent / "dev" / "DTgRPCconnector" / "root_ca.crt"
+    try:
+        state.grpc_client.close()
+    except Exception:
+        pass
+    try:
+        if root_ca_path.exists():
+            state.grpc_client = DrawThingsClient(
+                server_address=server_url,
+                insecure=False,
+                verify_ssl=False,
+                ssl_cert_path=str(root_ca_path),
+            )
+        else:
+            state.grpc_client = DrawThingsClient(
+                server_address=server_url, insecure=True
+            )
+        print(f"Reconnected to gRPC at {server_url}")
+    except Exception as e:
+        print(f"Warning: gRPC reconnect failed: {e}")
+
+
 def extract_prompt(image) -> str:
     """Extract prompt from uploaded image"""
     if not state.vision_processor:
@@ -1801,14 +1938,20 @@ def generate_image(
 
         status += "\n📡 Sending request to server...\n"
 
+        # Free GPU memory held by a warm Ollama model (shared host only)
+        _release_llm_vram()
+
         # Initialize progress
         progress(0, desc="Starting generation...")
 
-        # Generate!
+        # Generate! (retries with a fresh channel if the stream drops)
         generated_images = []
         current_step = 0
 
-        for response in state.grpc_client.stub.GenerateImage(request):
+        def _start_stream():
+            return state.grpc_client.stub.GenerateImage(request)
+
+        for response in _grpc_stream_with_retry(_start_stream, "GenerateImage"):
             # Handle progress updates
             if response.HasField("currentSignpost"):
                 signpost = response.currentSignpost
@@ -2110,14 +2253,31 @@ def generate_video(
             status += f"\n🖼️ {len(reference_images)} reference image(s) attached"
             yield None, status
 
-        result = state.grpc_client.generate_media(
-            prompt=prompt,
-            config=config,
-            negative_prompt=negative_prompt,
-            input_image=input_image,
-            reference_images=reference_images or None,
-            progress_callback=lambda stage, step: progress(step / max(steps, 1), desc=stage),
-        )
+        # Video models are the biggest VRAM consumers; release LLM memory first
+        _release_llm_vram()
+
+        result = None
+        for attempt in (1, 2):
+            try:
+                result = state.grpc_client.generate_media(
+                    prompt=prompt,
+                    config=config,
+                    negative_prompt=negative_prompt,
+                    input_image=input_image,
+                    reference_images=reference_images or None,
+                    progress_callback=lambda stage, step: progress(
+                        step / max(steps, 1), desc=stage
+                    ),
+                )
+                break
+            except Exception as e:
+                dropped = "UNAVAILABLE" in str(e) or "Stream removed" in str(e)
+                if not dropped or attempt == 2:
+                    raise RuntimeError(_friendly_grpc_error(e)) from e
+                print(f"Warning: video stream dropped (attempt {attempt}/2): {e}")
+                status += "\n🔄 Server closed the stream — reconnecting and retrying"
+                yield None, status
+                _reconnect_grpc()
 
         if not result.images:
             yield None, status + "\n❌ No video frames generated"
@@ -2349,6 +2509,7 @@ def edit_image(
 
         status += "📡 Sending to server...\n"
         progress(0.3, desc="Sending image + instruction...")
+        _release_llm_vram()
 
         # Build gRPC request with image (content-addressable via hash)
         request = imageService_pb2.ImageGenerationRequest(
@@ -2369,7 +2530,10 @@ def edit_image(
         image_was_encoded = False
         current_step = 0
 
-        for response in state.grpc_client.stub.GenerateImage(request):
+        def _start_edit_stream():
+            return state.grpc_client.stub.GenerateImage(request)
+
+        for response in _grpc_stream_with_retry(_start_edit_stream, "EditImage"):
             # Handle progress signposts
             if response.HasField("currentSignpost"):
                 signpost = response.currentSignpost
@@ -3324,19 +3488,29 @@ def create_ui():
                             info="Answer cap for extraction/style (num_predict). "
                             "Without a cap, small models can loop the whole context.",
                         )
+                        llm_release_vram = gr.Checkbox(
+                            label="Free LLM VRAM before generating",
+                            value=settings.get("release_llm_before_generate", True),
+                            info="Unloads Ollama models when it runs on the same "
+                            "host as Draw Things (shared GPU). Prevents "
+                            "'Socket closed' crashes from VRAM contention.",
+                        )
 
-                    def _save_llm_perf(timeout, keep_alive, disable_thinking, max_tokens):
+                    def _save_llm_perf(timeout, keep_alive, disable_thinking,
+                                       max_tokens, release_vram):
                         settings.update_config(
                             llm_timeout=int(timeout),
                             llm_keep_alive=keep_alive,
                             llm_disable_thinking=bool(disable_thinking),
                             llm_max_tokens=int(max_tokens),
+                            release_llm_before_generate=bool(release_vram),
                         )
                         return (
                             f"Saved: timeout {int(timeout)}s (x3 for generation), "
                             f"keep-alive '{keep_alive}', thinking "
                             f"{'off' if disable_thinking else 'on'}, "
-                            f"max output {int(max_tokens)} tokens"
+                            f"max output {int(max_tokens)} tokens, "
+                            f"VRAM release {'on' if release_vram else 'off'}"
                         )
 
                     llm_perf_status = gr.Textbox(label="Performance settings", lines=2)
@@ -3345,6 +3519,7 @@ def create_ui():
                         llm_keep_alive,
                         llm_disable_thinking,
                         llm_max_tokens,
+                        llm_release_vram,
                     ):
                         widget.change(
                             fn=_save_llm_perf,
@@ -3353,6 +3528,7 @@ def create_ui():
                                 llm_keep_alive,
                                 llm_disable_thinking,
                                 llm_max_tokens,
+                                llm_release_vram,
                             ],
                             outputs=llm_perf_status,
                         )

@@ -630,6 +630,8 @@ class DrawThingsClient:
         verify_ssl: bool = False,
         enable_compression: bool = False,
         ssl_cert_path: Optional[str] = None,
+        keepalive_time_ms: int = 60000,
+        keepalive_timeout_ms: int = 20000,
     ):
         """Initialize Draw Things client.
 
@@ -639,18 +641,25 @@ class DrawThingsClient:
             verify_ssl: Verify SSL certificates (only used when insecure=False).
             enable_compression: Enable gzip compression for requests/responses.
             ssl_cert_path: Path to SSL certificate file (for self-signed certs).
+            keepalive_time_ms: Interval between keepalive pings.
+            keepalive_timeout_ms: How long to wait for a ping ack before the
+                connection is considered dead.
         """
         self.server_address = server_address
 
+        # Conservative keepalive defaults. The previous settings (permit pings
+        # without calls, unlimited pings without data, 10 s min interval) make
+        # gRPC servers answer GOAWAY "too_many_pings"; on a busy Draw Things
+        # server that surfaces as "Stream removed (Socket closed)".
         options = [
             ("grpc.max_send_message_length", 32 * 1024 * 1024),
             ("grpc.max_receive_message_length", 32 * 1024 * 1024),
-            ("grpc.keepalive_time_ms", 30000),
-            ("grpc.keepalive_timeout_ms", 10000),
-            ("grpc.keepalive_permit_without_calls", 1),
-            ("grpc.http2.max_pings_without_data", 0),
-            ("grpc.http2.min_time_between_pings_ms", 10000),
-            ("grpc.http2.min_ping_interval_without_data_ms", 5000),
+            ("grpc.keepalive_time_ms", keepalive_time_ms),
+            ("grpc.keepalive_timeout_ms", keepalive_timeout_ms),
+            ("grpc.keepalive_permit_without_calls", 0),
+            ("grpc.http2.max_pings_without_data", 2),
+            ("grpc.http2.min_time_between_pings_ms", 60000),
+            ("grpc.http2.min_ping_interval_without_data_ms", 60000),
         ]
 
         if enable_compression:
