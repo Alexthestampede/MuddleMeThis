@@ -90,6 +90,8 @@ class OllamaTextProcessor(BaseTextProcessor):
                 temperature=temperature,
                 keep_alive=keep_alive,
                 think=think,
+                num_predict=max_tokens,
+                repeat_penalty=1.1 if max_tokens else None,
             )
 
             if not response:

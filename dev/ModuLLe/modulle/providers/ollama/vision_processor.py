@@ -57,6 +57,7 @@ class OllamaVisionProcessor(BaseVisionProcessor):
         max_tokens: Optional[int] = None,
         keep_alive: Optional[str] = None,
         think: Optional[bool] = None,
+        system_prompt: Optional[str] = None,
     ) -> Optional[str]:
         """
         Analyze an image with a custom prompt using Ollama.
@@ -100,6 +101,8 @@ class OllamaVisionProcessor(BaseVisionProcessor):
                 images=[image_data],
                 keep_alive=keep_alive,
                 think=think,
+                system=system_prompt,
+                num_predict=max_tokens,
             )
 
             if not response:

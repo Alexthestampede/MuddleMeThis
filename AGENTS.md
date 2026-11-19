@@ -70,6 +70,8 @@ Ollama unloads models after 5 min idle, so every cold call pays model load + vis
 - **LM Studio does not accept those kwargs** — `_ollama_extras()` returns `{}` for it; keep provider branching when adding new options.
 - ModuLLe's `generate()`/`chat()`/`analyze_image()` swallow exceptions and return `None`, so the app measures elapsed time to distinguish a timeout from an empty response (`_llm_failure_message`).
 
+**Every LLM call must cap output** (`llm_max_tokens`, sent as `num_predict`, default 700). Nothing capped generation before, so a small model that started looping echoed the entire instruction block back until it exhausted the context — the "loops the whole context" hang. Extraction/style also run at low temperature (0.2–0.3) and send the instruction file as a **system** prompt, not as the user prompt.
+
 ### Video models: LTX vs MiniMax H3
 | | LTX 2.3 | MiniMax H3 / FastH3 Omni |
 |---|---|---|

@@ -80,7 +80,8 @@ class OllamaClient:
             return []
 
     def generate(self, model, prompt, system=None, temperature=0.3, images=None,
-                 keep_alive=None, think=None):
+                 keep_alive=None, think=None, num_predict=None, repeat_penalty=None,
+                 stop=None):
         """
         Generate text using Ollama.
 
@@ -106,6 +107,13 @@ class OllamaClient:
                 "stream": False,
                 "options": {"temperature": temperature},
             }
+
+            if num_predict is not None:
+                payload["options"]["num_predict"] = int(num_predict)
+            if repeat_penalty is not None:
+                payload["options"]["repeat_penalty"] = float(repeat_penalty)
+            if stop:
+                payload["options"]["stop"] = list(stop)
 
             if system:
                 payload["system"] = system
@@ -149,7 +157,8 @@ class OllamaClient:
             logger.error(f"Unexpected error in Ollama generation: {e}")
             return None
 
-    def chat(self, model, messages, temperature=0.3, keep_alive=None, think=None):
+    def chat(self, model, messages, temperature=0.3, keep_alive=None, think=None,
+             num_predict=None, repeat_penalty=None):
         """
         Chat using Ollama chat API.
 
@@ -159,6 +168,8 @@ class OllamaClient:
             temperature: Generation temperature
             keep_alive: Optional duration the model stays loaded
             think: Optional bool; False disables reasoning output
+            num_predict: Optional cap on generated tokens (loop protection)
+            repeat_penalty: Optional repetition penalty
 
         Returns:
             Generated response, or None on error
@@ -170,6 +181,11 @@ class OllamaClient:
                 "stream": False,
                 "options": {"temperature": temperature},
             }
+
+            if num_predict is not None:
+                payload["options"]["num_predict"] = int(num_predict)
+            if repeat_penalty is not None:
+                payload["options"]["repeat_penalty"] = float(repeat_penalty)
 
             if keep_alive:
                 payload["keep_alive"] = keep_alive

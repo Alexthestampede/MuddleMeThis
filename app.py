@@ -197,7 +197,10 @@ def expand_prompt(user_prompt: str) -> str:
         system_prompt = settings.load_system_prompt("expand")
 
         result = state.text_processor.generate(
-            prompt=user_prompt, system_prompt=system_prompt if system_prompt else None
+            prompt=user_prompt,
+            system_prompt=system_prompt if system_prompt else None,
+            max_tokens=int(settings.get("llm_max_tokens", 700)),
+            **_ollama_extras(),
         )
 
         if result:
@@ -238,7 +241,10 @@ def expand_prompt_advanced(user_prompt: str, expander_name: str, aspect_ratio_la
             if not system_prompt:
                 # Last resort: simple expansion
                 result = state.text_processor.generate(
-                    prompt=user_prompt, system_prompt=None
+                    prompt=user_prompt,
+                    system_prompt=None,
+                    max_tokens=int(settings.get("llm_max_tokens", 700)),
+                    **_ollama_extras(),
                 )
                 if result:
                     state.current_prompt = result
@@ -272,7 +278,10 @@ def expand_prompt_advanced(user_prompt: str, expander_name: str, aspect_ratio_la
         
         # Generate the expanded prompt
         result = state.text_processor.generate(
-            prompt=prompt_input, system_prompt=system_prompt
+            prompt=prompt_input,
+            system_prompt=system_prompt,
+            max_tokens=int(settings.get("llm_max_tokens", 700)),
+            **_ollama_extras(),
         )
         
         if result:
@@ -377,13 +386,22 @@ def extract_prompt(image) -> str:
         # and the next extraction pays a cold start (measured 29s cold vs
         # 0.03s warm on a 1.7B model). think=False stops reasoning models
         # from burning minutes on a vision call.
+        #
+        # num_predict is mandatory here: nothing capped generation before, so
+        # a model that starts looping echoed the whole instruction block back
+        # until it hit the context limit - the "loops the context" failure.
         vision_kwargs = _ollama_extras()
+        extraction_instructions = (
+            extraction_instructions
+            or "Analyze the image and write a detailed generation prompt for it."
+        )
         started = time.time()
         result = state.vision_processor.analyze_image(
             image_data=img_base64,
-            prompt=extraction_instructions
-            if extraction_instructions
-            else "Analyze this image and write a detailed prompt that could generate a similar image.",
+            prompt="Follow the system instructions. Output only the prompt.",
+            system_prompt=extraction_instructions,
+            temperature=0.2,
+            max_tokens=int(settings.get("llm_max_tokens", 700)),
             **vision_kwargs,
         )
         elapsed = time.time() - started
@@ -481,9 +499,11 @@ def copy_style(image) -> str:
         started = time.time()
         result = state.vision_processor.analyze_image(
             image_data=img_base64,
-            prompt=style_prompt
-            if style_prompt
-            else "Describe the visual style of this image in great detail as if trying to reproduce it just from the description.",
+            prompt="Describe this image's visual style, as a style prompt.",
+            system_prompt=style_prompt
+            or "Describe the visual style of this image in great detail as if trying to reproduce it just from the description.",
+            temperature=0.3,
+            max_tokens=int(settings.get("llm_max_tokens", 700)),
             **_ollama_extras(),
         )
 
@@ -511,6 +531,8 @@ def refine_prompt(current_prompt: str, refinement_instruction: str) -> str:
         result = state.text_processor.generate(
             prompt=f"Current prompt: {current_prompt}\n\nModification requested: {refinement_instruction}\n\nProvide the refined prompt:",
             system_prompt=system_prompt if system_prompt else None,
+            max_tokens=int(settings.get("llm_max_tokens", 700)),
+            **_ollama_extras(),
         )
 
         if result:
@@ -788,7 +810,10 @@ def jsonify_prompt_for_ideogram(prompt: str, aspect_ratio_label: str) -> str:
         user_input = f"Prompt: {prompt}\nTarget aspect ratio: {aspect_ratio}"
 
         result = state.text_processor.generate(
-            prompt=user_input, system_prompt=system_prompt
+            prompt=user_input,
+            system_prompt=system_prompt,
+            max_tokens=int(settings.get("llm_max_tokens", 700)),
+            **_ollama_extras(),
         )
 
         if result and result.strip():
@@ -3292,24 +3317,43 @@ def create_ui():
                             value=settings.get("llm_disable_thinking", True),
                             info="Sends think=false (Ollama); avoids reasoning on vision calls.",
                         )
+                        llm_max_tokens = gr.Number(
+                            label="Max output tokens",
+                            value=settings.get("llm_max_tokens", 700),
+                            precision=0,
+                            info="Answer cap for extraction/style (num_predict). "
+                            "Without a cap, small models can loop the whole context.",
+                        )
 
-                    def _save_llm_perf(timeout, keep_alive, disable_thinking):
+                    def _save_llm_perf(timeout, keep_alive, disable_thinking, max_tokens):
                         settings.update_config(
                             llm_timeout=int(timeout),
                             llm_keep_alive=keep_alive,
                             llm_disable_thinking=bool(disable_thinking),
+                            llm_max_tokens=int(max_tokens),
                         )
                         return (
                             f"Saved: timeout {int(timeout)}s (x3 for generation), "
                             f"keep-alive '{keep_alive}', thinking "
-                            f"{'off' if disable_thinking else 'on'}"
+                            f"{'off' if disable_thinking else 'on'}, "
+                            f"max output {int(max_tokens)} tokens"
                         )
 
                     llm_perf_status = gr.Textbox(label="Performance settings", lines=2)
-                    for widget in (llm_timeout, llm_keep_alive, llm_disable_thinking):
+                    for widget in (
+                        llm_timeout,
+                        llm_keep_alive,
+                        llm_disable_thinking,
+                        llm_max_tokens,
+                    ):
                         widget.change(
                             fn=_save_llm_perf,
-                            inputs=[llm_timeout, llm_keep_alive, llm_disable_thinking],
+                            inputs=[
+                                llm_timeout,
+                                llm_keep_alive,
+                                llm_disable_thinking,
+                                llm_max_tokens,
+                            ],
                             outputs=llm_perf_status,
                         )
                     llm_model_dropdown = gr.Dropdown(
