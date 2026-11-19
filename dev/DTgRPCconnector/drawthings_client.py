@@ -1229,9 +1229,15 @@ class DrawThingsClient:
                 "copy",
                 "-c:a",
                 "aac",
-                "-shortest",
-                str(video),
             ]
+            # Audio was already trimmed/padded to the video duration above, so
+            # -shortest is unnecessary. Worse, with stream copy it truncates the
+            # tail of the video (measured: 73 frames -> 70) because the AAC
+            # encoder lags behind the video stream. Only use it when the video
+            # duration is unknown.
+            if video_duration <= 0:
+                cmd.append("-shortest")
+            cmd.append(str(video))
             subprocess.run(cmd, check=True)
             temp_video.unlink(missing_ok=True)
         except Exception:

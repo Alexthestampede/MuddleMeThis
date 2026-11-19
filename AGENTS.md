@@ -63,6 +63,19 @@ Image → booru tags for Pony/Illustrious/NoobAI, offline via ONNX Runtime (CPU,
 - Labels: keep kaomoji underscores (`0_0`, `>_<`), convert all other `_` to spaces. Categories: 0 general, 4 character, 9 rating. Defaults 0.35 general / 0.85 character; MCut optional.
 - Ratings are computed but deliberately **not emitted** into prompts.
 
+### Video models: LTX vs MiniMax H3
+| | LTX 2.3 | MiniMax H3 / FastH3 Omni |
+|---|---|---|
+| fps | **25** fixed | **24** |
+| audio rate | **48 kHz** | **32 kHz** |
+| max frames | 257, `(n−1) % 8 == 0` | **362** (73 ≈ 3 s) |
+| steps | 8 (distilled preset) | 50 official / **8 for FastH3 Omni** |
+| audio samples/ch | `1920×frames − 1440` | ~1337×frames at 32 kHz |
+
+- Both accept **reference images** (`reference_images`, VAE-encoded like edit refs) in addition to a first-frame `input_image`.
+- **Tiled decoding in the phone-exported H3 preset is a local-hardware artifact** — keep it off server-side (`tiled_decoding=False`, no tile dims). We keep the fields in the app but the presets no longer set them.
+- Muxing must NOT use `-shortest` when the audio was already trimmed to the video duration: with `-c:v copy` it truncates the video tail (measured 73 → 70 frames). `mux_audio_into_video()` omits it when `video_duration > 0`.
+
 ### Model picker (`model_catalog.py`)
 Model lists are enriched at gRPC connect: `{file, name, family, supports(image|video|upscaler), preset, steps, cfg, sampler, notes, label}`.
 - **Picking a model auto-applies its matching preset** (steps/cfg/sampler/shift/hires) — prevents the "wrong preset for this checkpoint" class of bug (Klein base vs distilled, Qwen 2.1 vs turbo).

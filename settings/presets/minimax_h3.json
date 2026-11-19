@@ -10,15 +10,12 @@
   "num_frames": 124,
   "width": 832,
   "height": 512,
-  "tiled_decoding": true,
-  "decoding_tile_width": 256,
-  "decoding_tile_height": 256,
-  "decoding_tile_overlap": 64,
+  "tiled_decoding": false,
   "shift_for_audio": 3.0,
   "uses_sol_attention": false,
   "sol_attention_start": 2,
   "sol_attention_tau": 0.5,
   "color_calibration": "none",
   "compression_artifacts": "disabled",
-  "notes": "VIDEO MODEL: MiniMax H3 (minimax_h3_fl2va_i4x.ckpt) generates video with audio at 832x512. 50 steps official; turbo LoRA variant (h3_turbo) uses 6 steps + taomate_h3_3step ComfyUI LoRA and 39 frames. Tiled decoding ON (256px tiles, 64px overlap). Not yet testable server-side."
+  "notes": "VIDEO MODEL: MiniMax H3 (minimax_h3_fl2va_i4x.ckpt) generates video with audio at 832x512. 50 steps official; the FastH3 Omni build wants 8 (see fasth3_omni preset). Supporting up to 362 frames. Accepts reference images. Tiled decoding OFF: the 256px tile values in the phone export describe local hardware, not the model. 73 frames ~= 3s at 25fps."
 }

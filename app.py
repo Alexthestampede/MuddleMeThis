@@ -1298,7 +1298,7 @@ def on_video_preset_selected(preset_name: str):
     steps = preset.get("steps", preset.get("recommended_steps", 16))
     cfg = preset.get("guidanceScale", preset.get("recommended_cfg", 1.0))
     shift = float(preset.get("shift", 1.0))
-    num_frames = preset.get("numFrames", 14)
+    num_frames = preset.get("numFrames", preset.get("num_frames", 14))
     hires_fix = preset.get("hiresFix", False)
     hires_fix_width = preset.get("hiresFixWidth", 640)
     hires_fix_height = preset.get("hiresFixHeight", 384)
@@ -1921,11 +1921,14 @@ def generate_video(
     hires_fix_height: int = 384,
     hires_fix_strength: float = 0.7,
     start_image=None,
+    reference_files=None,
     progress=gr.Progress(),
 ):
-    """Generate a video using Draw Things gRPC with optional starting image.
+    """Generate a video using Draw Things gRPC.
 
-    Yields (frame_preview, status_message) tuples for Gradio streaming.
+    start_image conditions the first frame (input_image, strength=1.0).
+    reference_files are additional reference images (LTX and H3 both accept
+    them) passed as reference hints, VAE-encoded like edit-model references.
     """
     if not state.grpc_client:
         yield None, "❌ gRPC not initialized. Configure in Settings tab first."
@@ -1941,9 +1944,31 @@ def generate_video(
 
     model_file = state.model_name_to_file.get(model, model)
 
-    # LTX video models have a fixed 25 fps output regardless of UI setting
+    # LTX video models have a fixed 25 fps output regardless of UI setting;
+    # H3 renders at 24 fps (matches its 32 kHz audio length).
     is_ltx = "ltx" in model.lower() if model else False
-    actual_fps = 25 if is_ltx else fps
+    is_h3 = "h3" in model.lower() if model else False
+    if is_ltx:
+        actual_fps = 25
+    elif is_h3:
+        actual_fps = 24
+    else:
+        actual_fps = fps
+
+    # Audio delivery rate differs per family: LTX 48 kHz, H3 32 kHz,
+    # other video models 24 kHz (upstream ModelZoo default).
+    audio_rate = 48000 if is_ltx else 32000 if is_h3 else 24000
+
+    # Frame-count rules differ per family: LTX is 9..257 with (n-1) % 8 == 0,
+    # H3 accepts up to 362. Clamp rather than silently producing a broken run.
+    num_frames = int(num_frames or 0)
+    if is_ltx:
+        if num_frames > 257 or num_frames < 9:
+            num_frames = max(9, min(257, num_frames))
+        if (num_frames - 1) % 8 != 0:
+            num_frames = 9 + ((num_frames - 9) // 8) * 8
+    elif is_h3:
+        num_frames = max(1, min(362, num_frames))
 
     try:
         # Use the new ImageGenerationConfig to leverage video fields
@@ -2001,12 +2026,27 @@ def generate_video(
             except Exception as e:
                 print(f"Warning: Could not process starting image: {e}")
 
+        # Extra reference images (LTX and H3 both accept them). VAE-encoded as
+        # visual tokens like edit-model references.
+        reference_images = []
+        for path in reference_files or []:
+            try:
+                ref = Image.open(path).convert("RGB")
+                reference_images.append(
+                    ReferenceImage(image=ref, weight=1.0, hint_type="shuffle")
+                )
+            except Exception as e:
+                print(f"Warning: Could not load reference image {path}: {e}")
+        if reference_images:
+            status += f"\n🖼️ {len(reference_images)} reference image(s) attached"
+            yield None, status
+
         result = state.grpc_client.generate_media(
             prompt=prompt,
             config=config,
             negative_prompt=negative_prompt,
             input_image=input_image,
-            reference_images=None,
+            reference_images=reference_images or None,
             progress_callback=lambda stage, step: progress(step / max(steps, 1), desc=stage),
         )
 
@@ -2051,7 +2091,7 @@ def generate_video(
             output_path=str(video_path),
             fps=actual_fps,
             audio=audio_bytes,
-            audio_sample_rate=48000,
+            audio_sample_rate=audio_rate,
         )
 
         final_status = (
@@ -3018,9 +3058,16 @@ def create_ui():
                 with gr.Row():
                     with gr.Column(scale=2):
                         video_start_image = gr.Image(
-                            label="Starting Image (optional)",
+                            label="Starting Image (optional, first frame)",
                             type="numpy",
                             sources=["upload", "clipboard"],
+                        )
+
+                        video_reference_images = gr.Files(
+                            label="Reference images (optional; LTX and H3)",
+                            file_count="multiple",
+                            file_types=["image"],
+                            type="filepath",
                         )
 
                         # Load video-capable presets for the dropdown
@@ -3082,7 +3129,12 @@ def create_ui():
 
                         with gr.Row():
                             video_frames = gr.Slider(
-                                1, 257, 14, step=1, label="Frames"
+                                1,
+                                362,
+                                14,
+                                step=1,
+                                label="Frames",
+                                info="LTX: max 257, (frames-1) % 8 == 0. H3: max 362.",
                             )
                             video_fps = gr.Slider(
                                 1, 60, 25, step=1, label="FPS",
@@ -3861,6 +3913,7 @@ def create_ui():
                 video_hires_fix_height,
                 video_hires_fix_strength,
                 video_start_image,
+                video_reference_images,
             ],
             outputs=[video_preview, video_status],
         )
