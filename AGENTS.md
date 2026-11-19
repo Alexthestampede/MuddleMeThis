@@ -63,6 +63,13 @@ Image → booru tags for Pony/Illustrious/NoobAI, offline via ONNX Runtime (CPU,
 - Labels: keep kaomoji underscores (`0_0`, `>_<`), convert all other `_` to spaces. Categories: 0 general, 4 character, 9 rating. Defaults 0.35 general / 0.85 character; MCut optional.
 - Ratings are computed but deliberately **not emitted** into prompts.
 
+### LLM provider timeouts (`dev/ModuLLe`)
+Ollama unloads models after 5 min idle, so every cold call pays model load + vision prefill (measured on .150: **29 s cold vs 0.03 s warm** for a 1.7B model). On a laptop that easily exceeds the HTTP timeout.
+- Generation calls use `request_timeout * 3`; base default 60 s → 180 s.
+- App passes `keep_alive` (default `30m`) and `think=False` for Ollama vision calls (`_ollama_extras()`), plus a configurable `llm_timeout` from Settings.
+- **LM Studio does not accept those kwargs** — `_ollama_extras()` returns `{}` for it; keep provider branching when adding new options.
+- ModuLLe's `generate()`/`chat()`/`analyze_image()` swallow exceptions and return `None`, so the app measures elapsed time to distinguish a timeout from an empty response (`_llm_failure_message`).
+
 ### Video models: LTX vs MiniMax H3
 | | LTX 2.3 | MiniMax H3 / FastH3 Omni |
 |---|---|---|

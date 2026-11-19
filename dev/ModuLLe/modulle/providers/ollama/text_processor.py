@@ -55,6 +55,8 @@ class OllamaTextProcessor(BaseTextProcessor):
         system_prompt: Optional[str] = None,
         temperature: float = DEFAULT_TEMPERATURE,
         max_tokens: Optional[int] = None,
+        keep_alive: Optional[str] = None,
+        think: Optional[bool] = None,
     ) -> Optional[str]:
         """
         Generate text from a prompt using Ollama.
@@ -83,7 +85,11 @@ class OllamaTextProcessor(BaseTextProcessor):
             messages.append({"role": "user", "content": prompt})
 
             response = self.client.chat(
-                model=self.model, messages=messages, temperature=temperature
+                model=self.model,
+                messages=messages,
+                temperature=temperature,
+                keep_alive=keep_alive,
+                think=think,
             )
 
             if not response:

@@ -79,7 +79,8 @@ class OllamaClient:
             logger.error(f"Failed to list models: {e}")
             return []
 
-    def generate(self, model, prompt, system=None, temperature=0.3, images=None):
+    def generate(self, model, prompt, system=None, temperature=0.3, images=None,
+                 keep_alive=None, think=None):
         """
         Generate text using Ollama.
 
@@ -89,6 +90,11 @@ class OllamaClient:
             system: System prompt (optional)
             temperature: Generation temperature
             images: List of base64-encoded images (for vision models)
+            keep_alive: Optional duration the model stays loaded (e.g. "30m");
+                without it Ollama unloads after 5 min and the next call pays a
+                full cold start.
+            think: Optional bool; False disables reasoning output on models
+                that support it (Ollama ignores it for other models).
 
         Returns:
             Generated text, or None on error
@@ -106,6 +112,11 @@ class OllamaClient:
 
             if images:
                 payload["images"] = images
+
+            if keep_alive:
+                payload["keep_alive"] = keep_alive
+            if think is not None:
+                payload["think"] = think
 
             logger.debug(f"Sending request to Ollama model: {model}")
             response = requests.post(
@@ -138,7 +149,7 @@ class OllamaClient:
             logger.error(f"Unexpected error in Ollama generation: {e}")
             return None
 
-    def chat(self, model, messages, temperature=0.3):
+    def chat(self, model, messages, temperature=0.3, keep_alive=None, think=None):
         """
         Chat using Ollama chat API.
 
@@ -146,6 +157,8 @@ class OllamaClient:
             model: Model name to use
             messages: List of message dicts with 'role' and 'content'
             temperature: Generation temperature
+            keep_alive: Optional duration the model stays loaded
+            think: Optional bool; False disables reasoning output
 
         Returns:
             Generated response, or None on error
@@ -157,6 +170,11 @@ class OllamaClient:
                 "stream": False,
                 "options": {"temperature": temperature},
             }
+
+            if keep_alive:
+                payload["keep_alive"] = keep_alive
+            if think is not None:
+                payload["think"] = think
 
             logger.debug(f"Sending chat request to Ollama model: {model}")
             response = requests.post(

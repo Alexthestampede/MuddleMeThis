@@ -128,6 +128,7 @@ def init_llm(
             base_url=server_url,
             text_model=model_name or "placeholder",
             vision_model=vision_model_name or None,
+            request_timeout=int(settings.get("llm_timeout", 180)),
         )
 
         # Try to get available models
@@ -152,6 +153,7 @@ def init_llm(
                     text_model=model_name,
                     vision_model=vision_model_name
                     or model_name,  # Use text model if no vision model specified
+                    request_timeout=int(settings.get("llm_timeout", 180)),
                 )
             )
             vision_info = (
@@ -309,6 +311,37 @@ def expand_prompt_advanced(user_prompt: str, expander_name: str, aspect_ratio_la
         return f"❌ Error: {str(e)}"
 
 
+def _ollama_extras() -> dict:
+    """Extra Ollama request options: keep the model resident, skip thinking.
+
+    Non-Ollama providers do not accept these keywords, so return {} for them.
+    """
+    if settings.get("llm_provider", "LM Studio") != "Ollama":
+        return {}
+    extras = {"keep_alive": settings.get("llm_keep_alive", "30m")}
+    if settings.get("llm_disable_thinking", True):
+        extras["think"] = False
+    return extras
+
+
+def _llm_failure_message(action: str, elapsed: float) -> str:
+    """Explain a silent LLM failure (ModuLLe returns None on timeout)."""
+    timeout = int(settings.get("llm_timeout", 180)) * 3
+    if elapsed >= timeout * 0.9:
+        return (
+            f"❌ Timed out trying to {action} after {elapsed:.0f}s "
+            f"(request limit {timeout}s).\n"
+            "On a laptop this is usually the model cold-starting plus slow "
+            "vision prefill. Options: raise 'LLM timeout' in Settings, keep "
+            "the machine plugged in, or use a smaller image."
+        )
+    return (
+        f"❌ Failed to {action} after {elapsed:.1f}s — the model returned "
+        "nothing.\nCheck that the model is loaded and supports vision "
+        "(Settings → Connect to LLM Server shows the status)."
+    )
+
+
 def extract_prompt(image) -> str:
     """Extract prompt from uploaded image"""
     if not state.vision_processor:
@@ -339,17 +372,26 @@ def extract_prompt(image) -> str:
 
         # Use the full instructions as the prompt for vision analysis
         # Vision models work best with instructions integrated into the prompt
+        #
+        # keep_alive matters: without it Ollama unloads the model after 5 min
+        # and the next extraction pays a cold start (measured 29s cold vs
+        # 0.03s warm on a 1.7B model). think=False stops reasoning models
+        # from burning minutes on a vision call.
+        vision_kwargs = _ollama_extras()
+        started = time.time()
         result = state.vision_processor.analyze_image(
             image_data=img_base64,
             prompt=extraction_instructions
             if extraction_instructions
             else "Analyze this image and write a detailed prompt that could generate a similar image.",
+            **vision_kwargs,
         )
+        elapsed = time.time() - started
 
         if result:
             state.current_prompt = result
             return result
-        return "❌ Failed to extract prompt"
+        return _llm_failure_message("extract a prompt", elapsed)
     except Exception as e:
         return f"❌ Error: {str(e)}"
 
@@ -436,16 +478,18 @@ def copy_style(image) -> str:
         style_prompt = settings.load_system_prompt("stylecopy")
 
         # Use vision model to analyze style
+        started = time.time()
         result = state.vision_processor.analyze_image(
             image_data=img_base64,
             prompt=style_prompt
             if style_prompt
             else "Describe the visual style of this image in great detail as if trying to reproduce it just from the description.",
+            **_ollama_extras(),
         )
 
         if result:
             return result
-        return "❌ Failed to analyze style"
+        return _llm_failure_message("analyze style", time.time() - started)
     except Exception as e:
         return f"❌ Error: {str(e)}"
 
@@ -3231,6 +3275,43 @@ def create_ui():
                         value=settings.get("llm_server", "http://localhost:1234"),
                         placeholder="LM Studio: http://localhost:1234 | Ollama: http://localhost:11434",
                     )
+                    with gr.Row():
+                        llm_timeout = gr.Number(
+                            label="LLM timeout (seconds)",
+                            value=settings.get("llm_timeout", 180),
+                            precision=0,
+                            info="Base timeout; generation gets 3x this. Raise on laptops.",
+                        )
+                        llm_keep_alive = gr.Textbox(
+                            label="Ollama keep-alive",
+                            value=settings.get("llm_keep_alive", "30m"),
+                            info="How long Ollama keeps the model loaded (e.g. 30m).",
+                        )
+                        llm_disable_thinking = gr.Checkbox(
+                            label="Disable thinking",
+                            value=settings.get("llm_disable_thinking", True),
+                            info="Sends think=false (Ollama); avoids reasoning on vision calls.",
+                        )
+
+                    def _save_llm_perf(timeout, keep_alive, disable_thinking):
+                        settings.update_config(
+                            llm_timeout=int(timeout),
+                            llm_keep_alive=keep_alive,
+                            llm_disable_thinking=bool(disable_thinking),
+                        )
+                        return (
+                            f"Saved: timeout {int(timeout)}s (x3 for generation), "
+                            f"keep-alive '{keep_alive}', thinking "
+                            f"{'off' if disable_thinking else 'on'}"
+                        )
+
+                    llm_perf_status = gr.Textbox(label="Performance settings", lines=2)
+                    for widget in (llm_timeout, llm_keep_alive, llm_disable_thinking):
+                        widget.change(
+                            fn=_save_llm_perf,
+                            inputs=[llm_timeout, llm_keep_alive, llm_disable_thinking],
+                            outputs=llm_perf_status,
+                        )
                     llm_model_dropdown = gr.Dropdown(
                         label="Text Model",
                         choices=[],
@@ -3293,6 +3374,7 @@ def create_ui():
                                 text_model=model,
                                 vision_model=vision_model
                                 or model,  # Use text model if no vision model
+                                request_timeout=int(settings.get("llm_timeout", 180)),
                             )
                             vision_info = (
                                 f" / Vision: {vision_model}" if vision_model else ""

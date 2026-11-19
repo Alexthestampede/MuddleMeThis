@@ -55,6 +55,8 @@ class OllamaVisionProcessor(BaseVisionProcessor):
         prompt: str,
         temperature: float = DEFAULT_TEMPERATURE,
         max_tokens: Optional[int] = None,
+        keep_alive: Optional[str] = None,
+        think: Optional[bool] = None,
     ) -> Optional[str]:
         """
         Analyze an image with a custom prompt using Ollama.
@@ -92,7 +94,12 @@ class OllamaVisionProcessor(BaseVisionProcessor):
         """
         try:
             response = self.client.generate(
-                model=self.model, prompt=prompt, temperature=temperature, images=[image_data]
+                model=self.model,
+                prompt=prompt,
+                temperature=temperature,
+                images=[image_data],
+                keep_alive=keep_alive,
+                think=think,
             )
 
             if not response:
