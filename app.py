@@ -89,6 +89,7 @@ class AppState:
         self.current_prompt = ""
         self.available_models = []
         self.available_loras = []
+        self.model_catalog = []  # enriched model entries (see model_catalog.py)
         self.current_model_base_resolution = 1024  # Default
         self.model_name_to_file = {}  # Maps display names → filenames
         self.lora_name_to_file = {}  # Maps display names → filenames
@@ -816,6 +817,8 @@ def init_grpc(server_url: str) -> Tuple[str, gr.Dropdown, gr.Dropdown]:
 
         models = []
         loras = []
+        models_data = []
+        loras_data = []
 
         # Use server's structured metadata (properly categorized)
         if response.HasField("override"):
@@ -891,7 +894,31 @@ def init_grpc(server_url: str) -> Tuple[str, gr.Dropdown, gr.Dropdown]:
         model_list = "\n".join([f"  • {m}" for m in models[:10]])  # Show first 10
         lora_info = f"\nAvailable LoRAs: {len(loras)}" if loras else ""
 
-        status = f"✅ Connected to gRPC: {server_url}\n\nAvailable models: {len(models)}\n{model_list}{lora_info}"
+        # Build the enriched catalog (family, capability, matching preset) and
+        # use its labels for the model dropdowns so the list is self-describing.
+        import model_catalog
+
+        try:
+            state.model_catalog = model_catalog.build_catalog(
+                models_data,
+                settings.load_model_presets(),
+            )
+        except Exception as catalog_error:
+            print(f"Warning: model catalog build failed: {catalog_error}")
+            state.model_catalog = []
+
+        image_entries = [
+            e for e in state.model_catalog if e["supports"] == "image"
+        ] or state.model_catalog
+        catalog_choices = [(e["label"], e["name"]) for e in image_entries]
+        default_model = image_entries[0]["name"] if image_entries else (models[0] if models else None)
+
+        status = (
+            f"✅ Connected to gRPC: {server_url}\n\n"
+            f"Available models: {len(models)}"
+            f" ({len(state.model_catalog)} catalogued, "
+            f"{len(image_entries)} image models)\n{model_list}{lora_info}"
+        )
 
         # Add "None" option to LoRAs for optional selection
         lora_choices = ["None"] + loras
@@ -899,7 +926,7 @@ def init_grpc(server_url: str) -> Tuple[str, gr.Dropdown, gr.Dropdown]:
         # Return updated dropdowns - they'll be used to update both settings and generation sections
         return (
             status,
-            gr.update(choices=models, value=models[0] if models else None),
+            gr.update(choices=catalog_choices, value=default_model),
             gr.update(choices=lora_choices, value="None"),
         )
     except Exception as e:
@@ -1002,6 +1029,94 @@ SAMPLERS = {
 
 SAMPLER_NAMES = list(SAMPLERS.keys())
 SAMPLER_DEFAULT = "DPM++ 2M Karras"  # Index 0, universally supported
+
+
+def _model_choices(query: str, hide_non_image: bool, only_video: bool = False):
+    """Filtered (label, value) pairs for a model dropdown."""
+    import model_catalog
+
+    entries = model_catalog.filter_catalog(
+        state.model_catalog, query, hide_non_image, only_video
+    )
+    return [(e["label"], e["name"]) for e in entries], entries
+
+
+def refresh_model_choices(
+    query: str, hide_non_image: bool, current: str, only_video: bool = False
+):
+    """Regenerate dropdown choices after a search or filter change."""
+    choices, entries = _model_choices(query, hide_non_image, only_video)
+    names = {e["name"] for e in entries}
+    value = current if current in names else (entries[0]["name"] if entries else None)
+    return gr.update(choices=choices, value=value)
+
+
+def on_edit_preset_selected(preset_name: str):
+    """Apply a preset to the Edit tab (subset of controls)."""
+    result = on_preset_selected(preset_name)
+    # steps, cfg, info, sampler, shift, res_shift, clip_skip
+    return (
+        result[0],
+        result[1],
+        result[2],
+        result[3],
+        result[4],
+        result[5],
+        result[12],
+    )
+
+
+def on_model_picked(model_name: str, tab: str = "generate"):
+    """Model picked -> info card, matching preset auto-applied, controls updated.
+
+    This is the behaviour borrowed from carderp's picker: choosing a checkpoint
+    also picks its preset, so steps/cfg/sampler can no longer silently mismatch.
+    """
+    import model_catalog
+
+    entry = model_catalog.find(state.model_catalog, model_name)
+    info_md = model_catalog.model_info_markdown(entry)
+    preset_key = entry.get("preset") if entry else ""
+
+    all_presets = settings.load_model_presets()
+    preset_choices = ["Custom (no preset)"] + list(all_presets.keys())
+
+    # Side effects: save selection, set base resolution for this model
+    on_model_selected(model_name)
+
+    if preset_key:
+        if tab == "generate":
+            pv = on_preset_selected(preset_key)
+        elif tab == "edit":
+            pv = on_edit_preset_selected(preset_key)
+        else:
+            pv = on_video_preset_selected(preset_key)
+        return (info_md, gr.update(choices=preset_choices, value=preset_key), *pv)
+
+    # No matching preset: leave controls alone. Only the Generate tab owns an
+    # aspect-ratio dropdown, so refresh that at the model's base resolution.
+    if tab == "generate":
+        aspect_ratios = settings.load_aspect_ratios(
+            state.current_model_base_resolution
+        )
+        aspect_choices = [label for label, _, _ in aspect_ratios]
+        default_aspect = (
+            aspect_choices[4] if len(aspect_choices) > 4 else aspect_choices[0]
+        )
+        noops = [gr.update()] * 14
+        return (
+            info_md,
+            gr.update(choices=preset_choices, value="Custom (no preset)"),
+            *noops,
+            gr.update(choices=aspect_choices, value=default_aspect),
+        )
+
+    noop_count = 7 if tab == "edit" else 12
+    return (
+        info_md,
+        gr.update(choices=preset_choices, value="Custom (no preset)"),
+        *([gr.update()] * noop_count),
+    )
 
 
 def on_preset_selected(
@@ -2772,6 +2887,20 @@ def create_ui():
                                 allow_custom_value=True,
                                 info="Use Qwen Image Edit or similar edit models",
                             )
+                            with gr.Row():
+                                edit_model_search = gr.Textbox(
+                                    label="Search models",
+                                    placeholder="name, file or family…",
+                                    scale=3,
+                                )
+                                edit_hide_non_image = gr.Checkbox(
+                                    label="Hide video/upscaler",
+                                    value=True,
+                                    scale=1,
+                                )
+                            edit_model_info = gr.Markdown(
+                                value="_Select a model to see its family and preset._"
+                            )
                             edit_preset = gr.Dropdown(
                                 label="Preset",
                                 choices=[
@@ -2992,6 +3121,18 @@ def create_ui():
                                 info="Second-pass denoising strength",
                             )
 
+                        with gr.Row():
+                            video_model_search = gr.Textbox(
+                                label="Search models",
+                                placeholder="name, file or family…",
+                                scale=3,
+                            )
+                            video_show_all = gr.Checkbox(
+                                label="Show all (include non-video)",
+                                value=False,
+                                scale=1,
+                            )
+
                         video_model = gr.Dropdown(
                             label="Model",
                             choices=[],
@@ -2999,6 +3140,10 @@ def create_ui():
                             interactive=True,
                             allow_custom_value=True,
                             info="Select a video model from the Draw Things server",
+                        )
+
+                        video_model_info = gr.Markdown(
+                            value="_Select a video model to see its family and preset._"
                         )
 
                         video_btn = gr.Button(
@@ -3216,12 +3361,28 @@ def create_ui():
                     lines=8,
                 )
 
+                with gr.Row():
+                    gen_model_search = gr.Textbox(
+                        label="Search models",
+                        placeholder="name, file or family…",
+                        scale=3,
+                    )
+                    gen_hide_non_image = gr.Checkbox(
+                        label="Hide video/upscaler models",
+                        value=True,
+                        scale=1,
+                    )
+
                 gen_model = gr.Dropdown(
                     label="Model",
                     choices=[],
                     value=settings.get("last_used_model", ""),
                     allow_custom_value=True,
                     filterable=True,
+                )
+
+                gen_model_info = gr.Markdown(
+                    value="_Select a model to see its family, preset and generation settings._"
                 )
 
                 gen_preset = gr.Dropdown(
@@ -3421,11 +3582,41 @@ def create_ui():
                 gen_image = gr.Image(label="Generated Image")
                 gen_status = gr.Textbox(label="Generation Status", lines=8)
 
-        # Model selection updates aspect ratios and shows available presets
+        # Model selection: info card + matching preset auto-applied
         gen_model.change(
-            fn=on_model_selected,
+            fn=lambda model: on_model_picked(model, "generate"),
             inputs=[gen_model],
-            outputs=[gen_preset, gen_preset_info, gen_aspect],
+            outputs=[
+                gen_model_info,
+                gen_preset,
+                gen_steps,
+                gen_cfg,
+                gen_preset_info,
+                gen_sampler,
+                gen_shift,
+                gen_res_shift,
+                gen_seed_mode,
+                gen_cfg_zero,
+                gen_hires,
+                gen_hires_start_width,
+                gen_hires_start_height,
+                gen_hires_strength,
+                gen_clip_skip,
+                gen_tea_cache,
+                gen_aspect,
+            ],
+        )
+
+        # Search / filter regenerate the model list (keeps current selection)
+        gen_model_search.input(
+            fn=lambda q, hide, cur: refresh_model_choices(q, hide, cur),
+            inputs=[gen_model_search, gen_hide_non_image, gen_model],
+            outputs=[gen_model],
+        )
+        gen_hide_non_image.change(
+            fn=lambda q, hide, cur: refresh_model_choices(q, hide, cur),
+            inputs=[gen_model_search, gen_hide_non_image, gen_model],
+            outputs=[gen_model],
         )
 
         # Preset selection updates all settings
@@ -3573,11 +3764,29 @@ def create_ui():
 
         # Edit tab model selection updates preset choices
         edit_model.change(
-            fn=lambda model_name: on_model_selected(model_name)[
-                0:2
-            ],  # Return preset dropdown and info only
+            fn=lambda model: on_model_picked(model, "edit"),
             inputs=[edit_model],
-            outputs=[edit_preset, edit_preset_info],
+            outputs=[
+                edit_model_info,
+                edit_preset,
+                edit_steps,
+                edit_cfg,
+                edit_preset_info,
+                edit_sampler,
+                edit_shift,
+                edit_res_shift,
+                edit_clip_skip,
+            ],
+        )
+        edit_model_search.input(
+            fn=lambda q, hide, cur: refresh_model_choices(q, hide, cur),
+            inputs=[edit_model_search, edit_hide_non_image, edit_model],
+            outputs=[edit_model],
+        )
+        edit_hide_non_image.change(
+            fn=lambda q, hide, cur: refresh_model_choices(q, hide, cur),
+            inputs=[edit_model_search, edit_hide_non_image, edit_model],
+            outputs=[edit_model],
         )
 
         # Toggle TCD gamma slider visibility in Edit tab
@@ -3588,21 +3797,6 @@ def create_ui():
         )
 
         # Edit tab preset selection updates settings (only the ones that exist in Edit tab)
-        def on_edit_preset_selected(preset_name: str):
-            """Apply preset to Edit tab (subset of controls)"""
-            result = on_preset_selected(preset_name)
-            # Extract: steps, cfg, info, sampler, shift, res_shift, clip_skip
-            # Skip: seed_mode, cfg_zero, hires, hires_width, hires_height, hires_strength, tea_cache
-            return (
-                result[0],
-                result[1],
-                result[2],
-                result[3],
-                result[4],
-                result[5],
-                result[12],
-            )  # steps, cfg, info, sampler, shift, res_shift, clip_skip
-
         edit_preset.change(
             fn=on_edit_preset_selected,
             inputs=[edit_preset],
@@ -3622,6 +3816,15 @@ def create_ui():
         def init_grpc_all(server_url):
             """Initialize gRPC and return updates for all dropdowns"""
             status, models_dropdown, loras_dropdown = init_grpc(server_url)
+            # Video tab lists video-capable models only, same enriched labels.
+            import model_catalog as _mc
+
+            video_entries = _mc.filter_catalog(state.model_catalog, only_video=True)
+            video_choices = [(e["label"], e["name"]) for e in video_entries]
+            video_update = gr.update(
+                choices=video_choices,
+                value=video_entries[0]["name"] if video_entries else None,
+            )
             # Return: status, settings_models, settings_loras, gen_models, gen_lora1, gen_lora2,
             #         edit_model, edit_lora1, edit_lora2, video_model
             return (
@@ -3634,7 +3837,7 @@ def create_ui():
                 models_dropdown,
                 loras_dropdown,
                 loras_dropdown,
-                models_dropdown,
+                video_update,
             )
 
         # Wire video generation button
@@ -3680,6 +3883,42 @@ def create_ui():
                 video_hires_fix_strength,
                 video_preset_info,
             ],
+        )
+
+        # Video model: info card + matching preset (video models by default)
+        video_model.change(
+            fn=lambda model: on_model_picked(model, "video"),
+            inputs=[video_model],
+            outputs=[
+                video_model_info,
+                video_preset,
+                video_width,
+                video_height,
+                video_steps,
+                video_cfg,
+                video_sampler,
+                video_shift,
+                video_frames,
+                video_hires_fix,
+                video_hires_fix_width,
+                video_hires_fix_height,
+                video_hires_fix_strength,
+                video_preset_info,
+            ],
+        )
+        video_model_search.input(
+            fn=lambda q, show_all, cur: refresh_model_choices(
+                q, False, cur, only_video=not show_all
+            ),
+            inputs=[video_model_search, video_show_all, video_model],
+            outputs=[video_model],
+        )
+        video_show_all.change(
+            fn=lambda q, show_all, cur: refresh_model_choices(
+                q, False, cur, only_video=not show_all
+            ),
+            inputs=[video_model_search, video_show_all, video_model],
+            outputs=[video_model],
         )
 
         grpc_connect_btn.click(

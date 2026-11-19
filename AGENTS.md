@@ -63,6 +63,14 @@ Image → booru tags for Pony/Illustrious/NoobAI, offline via ONNX Runtime (CPU,
 - Labels: keep kaomoji underscores (`0_0`, `>_<`), convert all other `_` to spaces. Categories: 0 general, 4 character, 9 rating. Defaults 0.35 general / 0.85 character; MCut optional.
 - Ratings are computed but deliberately **not emitted** into prompts.
 
+### Model picker (`model_catalog.py`)
+Model lists are enriched at gRPC connect: `{file, name, family, supports(image|video|upscaler), preset, steps, cfg, sampler, notes, label}`.
+- **Picking a model auto-applies its matching preset** (steps/cfg/sampler/shift/hires) — prevents the "wrong preset for this checkpoint" class of bug (Klein base vs distilled, Qwen 2.1 vs turbo).
+- Matching order: explicit `preset["model"]` filename (quant-tolerant canonical compare) → exact/containment canonical names → token overlap (≥2 tokens, same video-ness) → version→family label.
+- Canonicalisation **keeps bracket contents** (`FLUX.3 [klein] 5.6B`) and strips only quant noise (`q4p`/`i4x`/`4-bit`/`official`/`ckpt`). Deleting bracket contents breaks Klein/LTX matching.
+- Tabs filter by capability: Generate/Edit hide video+upscalers (checkbox), Video tab shows video only (checkbox to override).
+- Verified on .150: 33/77 models bind a preset; `FastH3 Omni` (version `minimax_h3`) binds to the MiniMax H3 preset via the family rule.
+
 ### Model-Specific Settings
 - SD 1.5: clip_skip=1, base_res=512
 - Pony/SDXL: clip_skip=2, base_res=1024
