@@ -353,6 +353,56 @@ def extract_prompt(image) -> str:
         return f"❌ Error: {str(e)}"
 
 
+def extract_tags(
+    image,
+    model_key: str = "vit",
+    general_threshold: float = 0.35,
+    character_threshold: float = 0.85,
+    include_character: bool = True,
+    trigger_word: str = "",
+    quality_prefix: str = "",
+    mcut: bool = False,
+) -> str:
+    """Extract Danbooru tags from an image with a local WD tagger (offline).
+
+    Complements extract_prompt(): the vision LLM writes prose (good for
+    SDXL/FLUX/edit models), while this returns the exact booru vocabulary
+    tag-trained models (Pony/Illustrious/NoobAI) were trained on.
+    """
+    if image is None:
+        return "❌ Please upload an image first"
+
+    try:
+        from tagger import TaggerError, get_tagger
+    except ImportError as e:
+        return f"❌ Tagger module unavailable: {e}"
+
+    try:
+        img = Image.fromarray(image).convert("RGB")
+        tagger = get_tagger(model_key)
+        tags = tagger.tag(
+            img,
+            general_threshold=float(general_threshold),
+            character_threshold=float(character_threshold),
+            mcut_general=bool(mcut),
+            mcut_character=False,
+        )
+        prompt = tagger.format_tags(
+            tags,
+            include_character=bool(include_character),
+            quality_prefix=quality_prefix or "",
+            trigger_word=trigger_word or "",
+        )
+        if not prompt:
+            return "❌ No tags above the selected thresholds — try lowering them."
+        state.current_prompt = prompt
+        return prompt
+    except TaggerError as e:
+        return f"❌ Tagger error: {e}"
+    except Exception as e:
+        return f"❌ Error: {str(e)}"
+
+
 def copy_style(image) -> str:
     """Analyze image style and generate detailed style description"""
     if not state.vision_processor:
@@ -2477,10 +2527,61 @@ def create_ui():
             # ==================================================================
             with gr.Tab("🖼️ Extract from Image"):
                 gr.Markdown("### Analyze an image and generate a matching prompt")
+                gr.Markdown(
+                    "*Vision LLM writes prose (SDXL/FLUX/edit models). "
+                    "Danbooru tagger returns the tags Pony/Illustrious/NoobAI were trained on.*"
+                )
 
                 with gr.Row():
                     with gr.Column(scale=2):
                         extract_image = gr.Image(label="Upload Image", type="numpy")
+                        extract_backend = gr.Radio(
+                            choices=[
+                                ("Vision LLM (prose)", "llm"),
+                                ("Danbooru tagger (tags)", "tagger"),
+                            ],
+                            value="llm",
+                            label="Extract with",
+                        )
+
+                        with gr.Group(visible=False) as tagger_options:
+                            tagger_model = gr.Dropdown(
+                                choices=[
+                                    ("WD ViT v3 — fast, 379 MB", "vit"),
+                                    ("WD EVA02-large v3 — better, 1.3 GB", "eva02_large"),
+                                ],
+                                value=settings.get("tagger_model", "vit"),
+                                label="Tagger model",
+                                info="First use downloads the model to models/tagger/",
+                            )
+                            with gr.Row():
+                                tagger_general_threshold = gr.Slider(
+                                    0.05, 1.0, 0.35, step=0.05,
+                                    label="General threshold",
+                                )
+                                tagger_character_threshold = gr.Slider(
+                                    0.05, 1.0, 0.85, step=0.05,
+                                    label="Character threshold",
+                                )
+                            tagger_include_character = gr.Checkbox(
+                                label="Include character/copyright tags",
+                                value=True,
+                                info="Uncheck for LoRA-style prompts",
+                            )
+                            tagger_mcut = gr.Checkbox(
+                                label="Auto threshold (MCut)", value=False,
+                                info="Pick the cut-off per image instead of the slider",
+                            )
+                            tagger_trigger = gr.Textbox(
+                                label="Trigger word (optional)", value="",
+                                info="Prefixed to the prompt, e.g. a LoRA trigger",
+                            )
+                            tagger_quality = gr.Textbox(
+                                label="Quality prefix (optional)",
+                                value="masterpiece, best quality",
+                                info="Comma-separated, inserted after the trigger",
+                            )
+
                         extract_btn = gr.Button(
                             "🔍 Extract Prompt", variant="primary", size="lg"
                         )
@@ -2497,8 +2598,51 @@ def create_ui():
                                 "🎨 Send to Edit", size="sm"
                             )
 
+                def _run_extract(
+                    image,
+                    backend,
+                    model_key,
+                    general_thr,
+                    character_thr,
+                    include_character,
+                    trigger,
+                    quality,
+                    mcut,
+                ):
+                    if backend == "tagger":
+                        settings.update_config(tagger_model=model_key)
+                        return extract_tags(
+                            image,
+                            model_key=model_key,
+                            general_threshold=general_thr,
+                            character_threshold=character_thr,
+                            include_character=include_character,
+                            trigger_word=trigger,
+                            quality_prefix=quality,
+                            mcut=mcut,
+                        )
+                    return extract_prompt(image)
+
+                extract_backend.change(
+                    fn=lambda backend: gr.update(visible=backend == "tagger"),
+                    inputs=[extract_backend],
+                    outputs=[tagger_options],
+                )
+
                 extract_btn.click(
-                    fn=extract_prompt, inputs=[extract_image], outputs=extract_output
+                    fn=_run_extract,
+                    inputs=[
+                        extract_image,
+                        extract_backend,
+                        tagger_model,
+                        tagger_general_threshold,
+                        tagger_character_threshold,
+                        tagger_include_character,
+                        tagger_trigger,
+                        tagger_quality,
+                        tagger_mcut,
+                    ],
+                    outputs=extract_output,
                 )
 
             # ==================================================================

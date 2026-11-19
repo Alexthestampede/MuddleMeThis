@@ -16,5 +16,9 @@ python-dotenv>=1.0.0
 imageio>=2.34.0
 imageio-ffmpeg>=0.4.9
 
+# Local Danbooru tagger (WD tagger v3 via ONNX, CPU)
+onnxruntime>=1.20.0
+huggingface_hub>=0.24.0
+
 # NOTE: dev/ModuLLe (editable) brings requests, beautifulsoup4, html2text,
 # ddgs, lxml. Install it with `cd dev/ModuLLe && pip install -e .`

@@ -29,6 +29,9 @@ Thumbs.db
 
 # Generated images and outputs
 outputs/
+
+# Tagger weights (downloaded on first use, e.g. models/tagger/hub/...)
+models/
 *.png
 *.jpg
 *.jpeg

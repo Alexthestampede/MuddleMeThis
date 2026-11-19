@@ -55,6 +55,14 @@ Wrong scale crashes the server: `[cnnp_reshape_build] dim: (2, 262144, 320)`.
 ### TLS / gRPC connection
 TLS is the default. Self-signed certs need the localhost name override — already in our connector: `grpc.ssl_target_name_override = "localhost"` + `ssl_cert_path` to `dev/DTgRPCconnector/root_ca.crt` (app.py lines ~743).
 
+### Local Danbooru tagger (`tagger.py`)
+Image → booru tags for Pony/Illustrious/NoobAI, offline via ONNX Runtime (CPU, no torch).
+- Models: `wd-vit-tagger-v3` (default, 379 MB, ~0.5 s/image) / `wd-eva02-large-tagger-v3` (opt-in, 1.3 GB). Both Apache-2.0. **Camie tagger is GPL-3.0 — do not add it to this MIT repo.**
+- Weights download to `models/tagger/` (gitignored) through `huggingface_hub`.
+- **Preprocessing must stay exact**: white RGBA composite → pad to square → BICUBIC resize to the model input (448) → float32 → **RGB→BGR**. Wrong order still returns plausible tags, just worse ones.
+- Labels: keep kaomoji underscores (`0_0`, `>_<`), convert all other `_` to spaces. Categories: 0 general, 4 character, 9 rating. Defaults 0.35 general / 0.85 character; MCut optional.
+- Ratings are computed but deliberately **not emitted** into prompts.
+
 ### Model-Specific Settings
 - SD 1.5: clip_skip=1, base_res=512
 - Pony/SDXL: clip_skip=2, base_res=1024
