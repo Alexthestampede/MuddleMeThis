@@ -373,9 +373,13 @@ def extract_tags(
         return "❌ Please upload an image first"
 
     try:
-        from tagger import TaggerError, get_tagger
+        from tagger import TaggerError, availability, get_tagger
     except ImportError as e:
         return f"❌ Tagger module unavailable: {e}"
+
+    status = availability()
+    if not status["ok"]:
+        return f"❌ {status['message']}"
 
     try:
         img = Image.fromarray(image).convert("RGB")
@@ -2545,6 +2549,17 @@ def create_ui():
                         )
 
                         with gr.Group(visible=False) as tagger_options:
+                            try:
+                                from tagger import availability as _tagger_availability
+
+                                _tag_status = _tagger_availability()
+                            except Exception as _e:  # tagger.py missing entirely
+                                _tag_status = {"ok": False, "message": f"tagger.py unavailable: {_e}"}
+
+                            tagger_status = gr.Markdown(
+                                ("✅ " if _tag_status["ok"] else "⚠️ ")
+                                + _tag_status["message"].replace("\n", "  \n")
+                            )
                             tagger_model = gr.Dropdown(
                                 choices=[
                                     ("WD ViT v3 — fast, 379 MB", "vit"),

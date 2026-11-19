@@ -55,6 +55,68 @@ class TaggerError(RuntimeError):
     """Raised when the tagger cannot be loaded or run."""
 
 
+def availability() -> dict:
+    """Report whether the local tagger can run, with an actionable fix.
+
+    Checks the actual interpreter running the app (``sys.executable``), not
+    whatever ``pip`` happens to be on PATH — a common failure on second
+    machines is installing into a different venv than the one serving the UI.
+    """
+    import platform
+    import sys
+
+    problems = []
+    detail = []
+
+    try:
+        import onnxruntime as ort  # noqa: F401
+
+        detail.append(f"onnxruntime {ort.__version__}")
+    except Exception as e:  # ImportError, OSError (libstdc++/glibc), etc.
+        problems.append(("onnxruntime", e))
+
+    try:
+        import huggingface_hub as hh
+
+        detail.append(f"huggingface_hub {hh.__version__}")
+    except Exception as e:
+        problems.append(("huggingface_hub", e))
+
+    py = f"{sys.version_info.major}.{sys.version_info.minor}"
+    arch = platform.machine()
+    install = f'"{sys.executable}" -m pip install onnxruntime huggingface_hub'
+
+    hint = ""
+    if sys.version_info < (3, 11):
+        hint = (
+            f"Python {py} has no onnxruntime 1.32 wheel; "
+            "use: pip install 'onnxruntime<1.23'"
+        )
+    if any(isinstance(err, OSError) for _, err in problems):
+        hint = (
+            "onnxruntime installed but its binary failed to load — needs "
+            "glibc >= 2.28 and libstdc++ (e.g. 'apt install libstdc++6')."
+        )
+
+    if problems:
+        detail_txt = "; ".join(f"{name}: {type(err).__name__}: {err}" for name, err in problems)
+        message = (
+            f"Local tagger unavailable ({detail_txt}).\n"
+            f"Fix with: {install}\n"
+            f"Interpreter: {sys.executable} (Python {py}, {arch})"
+        )
+        if hint:
+            message += f"\nNote: {hint}"
+        return {"ok": False, "message": message, "install": install, "detail": detail}
+
+    return {
+        "ok": True,
+        "message": f"Local tagger ready ({', '.join(detail)}; Python {py}, {arch})",
+        "install": install,
+        "detail": detail,
+    }
+
+
 class DanbooruTagger:
     """Lazy-loading wrapper around a WD tagger ONNX model."""
 
