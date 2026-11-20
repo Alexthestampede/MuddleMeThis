@@ -87,6 +87,8 @@ Ollama unloads models after 5 min idle, so every cold call pays model load + vis
 - **Tiled decoding in the phone-exported H3 preset is a local-hardware artifact** — keep it off server-side (`tiled_decoding=False`, no tile dims). We keep the fields in the app but the presets no longer set them.
 - Muxing must NOT use `-shortest` when the audio was already trimmed to the video duration: with `-c:v copy` it truncates the video tail (measured 73 → 70 frames). `mux_audio_into_video()` omits it when `video_duration > 0`.
 
+**Memory envelope (measured on .150, RTX 3060 12 GB + 24 GB RAM):** H3 at 124 frames fills VRAM to 11,925/12,288 MB (6 MB free) and then **spills into system RAM**, with the text encoder pushing total RAM toward ~18 GB plus swap growth. Idle VRAM is ~190 MB, SD1.5 1024² peaks ~5.3 GB. 124 frames is fine on an otherwise idle machine, but the failure is binary under any co-tenant (one Ollama model at 1.9 GB is enough) — and H3's bad failure mode is *not* a crash: it returns frames that look plausible but are broken. Verify output, don't trust exit status.
+
 ### Model picker (`model_catalog.py`)
 Model lists are enriched at gRPC connect: `{file, name, family, supports(image|video|upscaler), preset, steps, cfg, sampler, notes, label}`.
 - **Picking a model auto-applies its matching preset** (steps/cfg/sampler/shift/hires) — prevents the "wrong preset for this checkpoint" class of bug (Klein base vs distilled, Qwen 2.1 vs turbo).
