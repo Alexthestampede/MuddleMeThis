@@ -2073,6 +2073,25 @@ def generate_image(
         )
 
 
+def preview_flatness(data: bytes) -> Optional[float]:
+    """Std-dev of a preview's luminance, or None if it cannot be decoded.
+
+    A memory-starved H3/LTX run emits empty latents: the preview is a flat
+    gray field (occasionally with a single colored dot) while progress keeps
+    advancing. Low std across several previews is the early tell.
+    """
+    try:
+        import numpy as _np
+
+        pil = decode_preview(data)
+        if pil is None:
+            return None
+        arr = _np.asarray(pil.convert("L"), dtype=_np.float32)
+        return float(arr.std())
+    except Exception:
+        return None
+
+
 def _save_video_from_tensors(
     frames: List[bytes],
     output_path: str,
@@ -2283,6 +2302,39 @@ def generate_video(
         _release_llm_vram()
 
         result = None
+
+        # Watch the low-res previews. On a memory-starved run the model emits
+        # empty latents: the preview is a flat gray field (sometimes with a
+        # single colored dot) while the progress bar keeps advancing, and the
+        # server only dies at the end. Flag that live instead of after 3-5
+        # wasted minutes.
+        preview_state = {"blank": 0, "total": 0, "warned": False}
+
+        def _inspect_preview(data: bytes) -> None:
+            try:
+                std = preview_flatness(data)
+                if std is None:
+                    return
+                preview_state["total"] += 1
+                if std < 2.5:
+                    preview_state["blank"] += 1
+                else:
+                    preview_state["blank"] = 0
+                if preview_state["blank"] >= 3 and not preview_state["warned"]:
+                    preview_state["warned"] = True
+                    print(
+                        "Warning: preview is blank across 3 updates — the run is "
+                        "likely producing empty latents (memory pressure)"
+                    )
+            except Exception:
+                pass
+
+        def _progress(stage: str, step: int) -> None:
+            desc = stage
+            if preview_state["warned"]:
+                desc = f"{stage} — ⚠️ blank previews (likely memory pressure)"
+            progress(step / max(steps, 1), desc=desc)
+
         for attempt in (1, 2):
             try:
                 result = state.grpc_client.generate_media(
@@ -2291,9 +2343,8 @@ def generate_video(
                     negative_prompt=negative_prompt,
                     input_image=input_image,
                     reference_images=reference_images or None,
-                    progress_callback=lambda stage, step: progress(
-                        step / max(steps, 1), desc=stage
-                    ),
+                    progress_callback=_progress,
+                    preview_callback=_inspect_preview,
                 )
                 break
             except Exception as e:
@@ -2362,6 +2413,11 @@ def generate_video(
                 "\n\n⚠️ Output may be corrupted (VRAM spill): "
                 + "; ".join(frame_warnings)
                 + "\nFree the machine (or drop frames/resolution) and retry."
+            )
+        if preview_state["warned"]:
+            final_status += (
+                "\n\n⚠️ Previews were blank during sampling — this run was "
+                "memory-starved. Free the machine and retry."
             )
 
         # Return first frame as preview
