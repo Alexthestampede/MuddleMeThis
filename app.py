@@ -2079,12 +2079,16 @@ def _save_video_from_tensors(
     fps: int = 24,
     audio: Optional[bytes] = None,
     audio_sample_rate: int = 48000,
-) -> str:
+) -> Tuple[str, List[str]]:
     """Assemble decoded Draw Things tensor frames into an MP4 video.
 
     imageio's imread cannot read raw tensor chunks, so we decode each frame
     with tensor_to_pil() and write numpy arrays via imageio. Audio muxing
     (sanitization + WAV intermediate + ffmpeg) is delegated to the connector.
+
+    Returns (path, warnings). Warnings flag degenerate frames: when VRAM spills
+    into system memory the model can still emit a full-length video whose
+    frames are mush, so a successful return is not proof of a good result.
     """
     import imageio
     import numpy as np
@@ -2093,13 +2097,35 @@ def _save_video_from_tensors(
     output.parent.mkdir(parents=True, exist_ok=True)
 
     writer = imageio.get_writer(output_path, fps=fps, codec="libx264")
+    frame_means: List[float] = []
+    frame_stds: List[float] = []
     for frame_bytes in frames:
         pil_frame = tensor_to_pil(frame_bytes)
         # Ensure RGB for consistent video encoding
         if pil_frame.mode != "RGB":
             pil_frame = pil_frame.convert("RGB")
-        writer.append_data(np.array(pil_frame))
+        arr = np.asarray(pil_frame)
+        gray = arr.mean(axis=2)
+        frame_means.append(float(gray.mean()))
+        frame_stds.append(float(gray.std()))
+        writer.append_data(arr)
     writer.close()
+
+    warnings: List[str] = []
+    if frame_stds:
+        flat = sum(1 for s in frame_stds if s < 5)
+        black = sum(1 for m in frame_means if m < 8)
+        drift = max(
+            (abs(b - a) for a, b in zip(frame_means, frame_means[1:])), default=0.0
+        )
+        if flat:
+            warnings.append(f"{flat} near-uniform frame(s) — possible VRAM spill")
+        if black:
+            warnings.append(f"{black} near-black frame(s)")
+        if drift > 40:
+            warnings.append("large brightness jump between frames")
+        if len(frame_means) > 1 and max(frame_stds) - min(frame_stds) > 120:
+            warnings.append("inconsistent detail across frames")
 
     if audio:
         try:
@@ -2112,7 +2138,7 @@ def _save_video_from_tensors(
         except Exception as e:
             print(f"Warning: Could not mux audio: {e}")
 
-    return str(output)
+    return str(output), warnings
 
 
 def generate_video(
@@ -2315,7 +2341,7 @@ def generate_video(
             print(f"Warning: skipping malformed audio chunk ({e})")
             audio_bytes = None
 
-        saved_video = _save_video_from_tensors(
+        saved_video, frame_warnings = _save_video_from_tensors(
             frames=result.images,
             output_path=str(video_path),
             fps=actual_fps,
@@ -2331,6 +2357,12 @@ def generate_video(
         )
         if audio_bytes:
             final_status += "\n🔊 Audio included"
+        if frame_warnings:
+            final_status += (
+                "\n\n⚠️ Output may be corrupted (VRAM spill): "
+                + "; ".join(frame_warnings)
+                + "\nFree the machine (or drop frames/resolution) and retry."
+            )
 
         # Return first frame as preview
         preview_image = tensor_to_pil(result.images[0]) if result.images else None
