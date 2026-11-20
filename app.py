@@ -15,6 +15,8 @@ import sys
 import os
 import subprocess
 import time
+import functools
+import threading
 import hashlib
 import json
 from math import gcd
@@ -348,6 +350,56 @@ def _llm_failure_message(action: str, elapsed: float) -> str:
         f"❌ Failed to {action} after {elapsed:.1f}s — the model returned "
         "nothing.\nCheck that the model is loaded and supports vision "
         "(Settings → Connect to LLM Server shows the status)."
+    )
+
+
+# Only one generation at a time: H3/LTX need the whole GPU, and even a small
+# LLM on the same card breaks them. Gradio can dispatch different events
+# concurrently, so guard explicitly.
+_GEN_LOCK = threading.Lock()
+
+
+def _single_flight(gen_func):
+    """Serialize a generator-based generation handler."""
+
+    @functools.wraps(gen_func)
+    def wrapper(*args, **kwargs):
+        if not _GEN_LOCK.acquire(blocking=False):
+            yield None, (
+                "⏳ Another generation is already running.\n"
+                "H3/LTX need the entire GPU, so only one job can run at a time."
+            )
+            return
+        try:
+            yield from gen_func(*args, **kwargs)
+        finally:
+            _GEN_LOCK.release()
+
+    return wrapper
+
+
+def _ensure_grpc_alive(wait_s: float = 10.0) -> Optional[str]:
+    """Confirm the server answers before starting a long run.
+
+    A killed server (see systemd-oomd notes) otherwise wastes the whole
+    request: the stream dies immediately and the user learns nothing.
+    """
+    if not state.grpc_client:
+        return "❌ gRPC not initialized. Configure in Settings tab first."
+
+    for i in range(int(wait_s // 2) + 1):
+        try:
+            state.grpc_client.echo("ping")
+            return None
+        except Exception:
+            if i == 0:
+                print("Server not answering; waiting for it to come back…")
+            time.sleep(2)
+            _reconnect_grpc()
+    return (
+        "❌ The Draw Things server is not answering (dead or restarting).\n"
+        "Start/restart Draw Things on the server, then reconnect in Settings.\n"
+        "If the last run was a large video, it was probably killed for memory."
     )
 
 
@@ -1625,6 +1677,7 @@ def decode_preview(data: bytes) -> Optional[Image.Image]:
         return None
 
 
+@_single_flight
 def generate_image(
     prompt: str,
     model: str,
@@ -1656,6 +1709,11 @@ def generate_image(
     """Generate image using Draw Things gRPC with progress tracking (generator for live preview)"""
     if not state.grpc_client:
         yield None, "❌ gRPC not initialized. Configure in Settings tab first."
+        return
+
+    unreachable = _ensure_grpc_alive()
+    if unreachable:
+        yield None, unreachable
         return
 
     if not prompt:
@@ -2170,6 +2228,7 @@ def _save_video_from_tensors(
     return str(output), warnings
 
 
+@_single_flight
 def generate_video(
     prompt: str,
     model: str,
@@ -2199,6 +2258,11 @@ def generate_video(
     """
     if not state.grpc_client:
         yield None, "❌ gRPC not initialized. Configure in Settings tab first."
+        return
+
+    unreachable = _ensure_grpc_alive()
+    if unreachable:
+        yield None, unreachable
         return
 
     if not prompt:
@@ -2447,6 +2511,7 @@ def generate_video(
         yield None, f"❌ Error during video generation:\n{str(e)}\n\nDetails:\n{error_details}"
 
 
+@_single_flight
 def edit_image(
     input_image,
     instruction: str,
@@ -2471,6 +2536,11 @@ def edit_image(
     """Edit an image using AI instructions (generator for live preview)"""
     if not state.grpc_client:
         yield None, "❌ gRPC not initialized. Configure in Settings tab first."
+        return
+
+    unreachable = _ensure_grpc_alive()
+    if unreachable:
+        yield None, unreachable
         return
 
     if input_image is None:
@@ -3389,7 +3459,14 @@ def create_ui():
             with gr.Tab("🎬 Video"):
                 gr.Markdown("### Generate a video from a prompt")
                 gr.Markdown(
-                    "*Requires a video-capable Draw Things model (e.g., LTX 2.3). Optional starting image for first-frame conditioning.*"
+                    "*Requires a video-capable Draw Things model (e.g., LTX 2.3 or MiniMax H3). "
+                    "Optional starting image for first-frame conditioning.*"
+                )
+                gr.Markdown(
+                    "⚠️ **H3 and LTX need the entire GPU.** Nothing else may run on "
+                    "the server during generation — no LLM extraction, no second "
+                    "job, not even a small model. LLM memory is released "
+                    "automatically first; anything else must be stopped by hand."
                 )
 
                 with gr.Row():

@@ -89,6 +89,11 @@ Ollama unloads models after 5 min idle, so every cold call pays model load + vis
 
 **Memory envelope (measured on .150, RTX 3060 12 GB + 24 GB RAM):** H3 at 124 frames fills VRAM to 11,925/12,288 MB (6 MB free) and then **spills into system RAM**, with the text encoder pushing total RAM toward ~18 GB plus swap growth. Idle VRAM is ~190 MB, SD1.5 1024² peaks ~5.3 GB. 124 frames is fine on an otherwise idle machine, but the failure is binary under any co-tenant (one Ollama model at 1.9 GB is enough) — and H3's bad failure mode is *not* a crash: it returns frames that look plausible but are broken. Verify output, don't trust exit status.
 
+**H3 and LTX are exclusive workloads.** They need the entire GPU: a co-tenant — another generation, an agent's second job, or even a 0.8B LLM on the GPU — is enough to kill the run. There is no useful multitasking on .150 while one is rendering.
+- `_single_flight` decorator serializes `generate_image`, `edit_image` and `generate_video` inside the app, so concurrent UI events cannot stack jobs.
+- `_ensure_grpc_alive()` pings before each run (waiting up to 10 s for a restarting server) and fails fast with instructions; previously a dead server burned the whole request.
+- `_release_llm_vram()` frees Ollama first; everything else must be stopped by hand, which the Video tab says in the UI.
+
 **Who actually kills the server:** `systemd-oomd` on .150. After a heavy H3 run the box shows `gRPCServerCLI` alive but spinning at ~94% CPU with 730 MB RSS and **no VRAM**, then the process disappears — i.e. the OOM killer reaps it at the decode stage, which is why "it crashes the server at the end and you get nothing". With mcpee: check `vram_free_mb`, `compute_apps` and `systemd-oomd`/`systemd` in `top_cpu`; an empty process list means the server is dead and must be restarted before any run. Diagnose on the host with `journalctl -k | grep -i oom` and `journalctl -u systemd-oomd`.
 
 **A blank preview means the run is already dead.** A memory-starved H3 render still advances the progress bar while emitting empty latents: the low-res preview is flat gray, often with a single colored dot (measured std 0.0–0.5, versus ~49 for real content). `generate_video` watches previews and flips the progress text to "blank previews (likely memory pressure)" after three consecutive flat ones, ~3 minutes before the crash.
