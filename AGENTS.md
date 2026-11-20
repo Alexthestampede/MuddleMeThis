@@ -89,6 +89,10 @@ Ollama unloads models after 5 min idle, so every cold call pays model load + vis
 
 **Memory envelope (measured on .150, RTX 3060 12 GB + 24 GB RAM):** H3 at 124 frames fills VRAM to 11,925/12,288 MB (6 MB free) and then **spills into system RAM**, with the text encoder pushing total RAM toward ~18 GB plus swap growth. Idle VRAM is ~190 MB, SD1.5 1024² peaks ~5.3 GB. 124 frames is fine on an otherwise idle machine, but the failure is binary under any co-tenant (one Ollama model at 1.9 GB is enough) — and H3's bad failure mode is *not* a crash: it returns frames that look plausible but are broken. Verify output, don't trust exit status.
 
+**Who actually kills the server:** `systemd-oomd` on .150. After a heavy H3 run the box shows `gRPCServerCLI` alive but spinning at ~94% CPU with 730 MB RSS and **no VRAM**, then the process disappears — i.e. the OOM killer reaps it at the decode stage, which is why "it crashes the server at the end and you get nothing". With mcpee: check `vram_free_mb`, `compute_apps` and `systemd-oomd`/`systemd` in `top_cpu`; an empty process list means the server is dead and must be restarted before any run. Diagnose on the host with `journalctl -k | grep -i oom` and `journalctl -u systemd-oomd`.
+
+**A blank preview means the run is already dead.** A memory-starved H3 render still advances the progress bar while emitting empty latents: the low-res preview is flat gray, often with a single colored dot (measured std 0.0–0.5, versus ~49 for real content). `generate_video` watches previews and flips the progress text to "blank previews (likely memory pressure)" after three consecutive flat ones, ~3 minutes before the crash.
+
 ### Model picker (`model_catalog.py`)
 Model lists are enriched at gRPC connect: `{file, name, family, supports(image|video|upscaler), preset, steps, cfg, sampler, notes, label}`.
 - **Picking a model auto-applies its matching preset** (steps/cfg/sampler/shift/hires) — prevents the "wrong preset for this checkpoint" class of bug (Klein base vs distilled, Qwen 2.1 vs turbo).

@@ -423,9 +423,18 @@ def _friendly_grpc_error(error, server_url: str = "") -> str:
     if "stream removed" in blob or "socket closed" in blob:
         return (
             f"❌ The Draw Things server closed the connection mid-run ({server}).\n"
-            "Usual causes: the server exited or ran out of memory on this "
-            "model/resolution, or the network dropped. Try again; if it repeats, "
-            "lower the resolution or use a smaller quantisation.\n"
+            "Usual causes: the server process was killed (out-of-memory / "
+            "systemd-oomd), or it ran out of memory on this model/resolution.\n"
+            "Check on the server: `journalctl -k | grep -i oom` and `journalctl "
+            "-u systemd-oomd`. Fix by freeing the machine, lowering frames or "
+            "resolution, or raising the OOM policy.\n"
+            f"Details: {details or text}"
+        )
+    if "connection reset" in blob:
+        return (
+            f"❌ The connection to the Draw Things server was reset ({server}).\n"
+            "The server likely restarted — wait a few seconds and reconnect, "
+            "then check whether the previous run was killed for memory.\n"
             f"Details: {details or text}"
         )
     if "deadline" in blob:
@@ -458,6 +467,7 @@ def _grpc_stream_with_retry(start_stream, label: str, attempts: int = 2):
                 f"Warning: {label} stream dropped (attempt {attempt}/{attempts}): "
                 f"{getattr(e, 'details', lambda: e)()}"
             )
+            time.sleep(8)  # give a killed/restarting server time to come back
             _reconnect_grpc()
 
 
@@ -2352,8 +2362,14 @@ def generate_video(
                 if not dropped or attempt == 2:
                     raise RuntimeError(_friendly_grpc_error(e)) from e
                 print(f"Warning: video stream dropped (attempt {attempt}/2): {e}")
-                status += "\n🔄 Server closed the stream — reconnecting and retrying"
+                status += (
+                    "\n🔄 Server closed the stream — waiting 8s for it to come "
+                    "back, then retrying"
+                )
                 yield None, status
+                # A killed server needs time to restart; reconnecting instantly
+                # just yields "connection reset".
+                time.sleep(8)
                 _reconnect_grpc()
 
         if not result.images:
