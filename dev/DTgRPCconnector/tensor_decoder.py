@@ -61,7 +61,6 @@ def decode_tensor(data: bytes) -> Tuple[np.ndarray, int, int, int]:
         
         # fpzip.decompress returns float32 with shape (1, height, width, channels)
         float_data = fpzip.decompress(compressed_data, order='C')
-        print(f"Decompressed shape: {float_data.shape}, dtype: {float_data.dtype}")
         
         # Remove batch dimension if present and ensure correct shape
         if float_data.ndim == 4 and float_data.shape[0] == 1:
@@ -80,8 +79,6 @@ def decode_tensor(data: bytes) -> Tuple[np.ndarray, int, int, int]:
         # Reshape to image dimensions
         tensor = float_data.reshape((height, width, channels))
     
-    print(f"Tensor shape: {tensor.shape}")
-    print(f"Value range: [{tensor.min():.3f}, {tensor.max():.3f}]")
     
     # Convert from [-1, 1] to [0, 255]
     # CRITICAL: Must use 127.5 for proper symmetry with encoder

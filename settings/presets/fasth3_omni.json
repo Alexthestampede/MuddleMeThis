@@ -1,6 +1,6 @@
 {
   "name": "FastH3 Omni",
-  "description": "Community FastH3 Omni build of MiniMax H3 (reference-to-video+audio)",
+  "description": "FastH3 Omni, an 8-step MiniMax H3 ref2va video model (reference-to-video with audio)",
   "base_resolution": 832,
   "clip_skip": 1,
   "model": "fasth3_omni_i4x.ckpt",
@@ -8,11 +8,11 @@
   "recommended_cfg": 1.0,
   "sampler": "DDIM Trailing",
   "shift": 12.0,
+  "shift_for_audio": 3.0,
   "num_frames": 73,
   "width": 832,
   "height": 512,
   "tiled_decoding": false,
-  "shift_for_audio": 3.0,
   "compression_artifacts": "disabled",
-  "notes": "FastH3 Omni (fasth3_omni_i4x.ckpt, server modifier 'ref2va'): 8 steps - NOT the 50-step MiniMax H3 default. CFG 1.0, DDIM Trailing, shift 12, 832x512. Accepts reference images. Up to 362 frames. Tiled decoding OFF: the tile settings in the phone-exported H3 preset reflect local hardware, not the model. 73 frames ~= 3s at 25fps."
+  "notes": "8-step distilled MiniMax H3 [ref2va]: 24 fps video with synchronized 32 kHz stereo audio. 8 steps (NOT the 50-step base H3), Text Guidance 1.0, DDIM Trailing, Shift 12, Audio Shift 3. Official recipe is 768-pixel short side (1280x768, verified on .150: 73 frames in 539s); this preset uses a lighter 832x512 that fits a 12GB card with headroom. Reference-to-video: reference images can be attached in the Video tab and referenced as <Picture 1>, <Picture 2>. 73 frames ~= 3s at 24 fps. Tiled decoding OFF: the tile values in the phone export describe local hardware, not the model."
 }

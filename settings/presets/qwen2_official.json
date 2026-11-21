@@ -10,5 +10,5 @@
   "resolution_dependent_shift": true,
   "width": 1536,
   "height": 1536,
-  "notes": "Official DT settings for qwen_image_2.1_q8p.ckpt at 1536x1536: 40 steps, CFG 1.0, DDIM Trailing, shift 1 with resolution-dependent shift. Also an edit/kontext-capable model (reference-image editing, native transparency) \u2014 dtline edit forces strength=1.0. Model: https://huggingface.co/Qwen/Qwen-Image-2.1"
+  "notes": "Official DT settings for qwen_image_2.1_q8p.ckpt at 1536x1536: 40 steps, CFG 1.0, DDIM Trailing, shift 1 with resolution-dependent shift. Also an edit/kontext-capable model (reference-image editing, native transparency) \u2014 dtline edit forces strength=1.0. Model: https://huggingface.co/Qwen/Qwen-Image-2.1\n\nQwen Image 2.1 outputs native RGBA (transparency preserved). Also kontext edit-capable: strength is forced to 1.0 for edit runs."
 }

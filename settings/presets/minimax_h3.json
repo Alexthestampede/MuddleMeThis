@@ -17,5 +17,5 @@
   "sol_attention_tau": 0.5,
   "color_calibration": "none",
   "compression_artifacts": "disabled",
-  "notes": "VIDEO MODEL: MiniMax H3 (minimax_h3_fl2va_i4x.ckpt) generates video with audio at 832x512. 50 steps official; the FastH3 Omni build wants 8 (see fasth3_omni preset). Supporting up to 362 frames. Accepts reference images. Tiled decoding OFF: the 256px tile values in the phone export describe local hardware, not the model. 73 frames ~= 3s at 25fps."
+  "notes": "VIDEO MODEL: MiniMax H3 (minimax_h3_fl2va_i4x.ckpt) generates video with audio at 832x512. 50 steps official; the FastH3 Omni build wants 8 (see fasth3_omni preset). Supporting up to 362 frames. Accepts reference images. Tiled decoding OFF: the 256px tile values in the phone export describe local hardware, not the model. 73 frames ~= 3s at 25fps.\n\nAudio is delivered at 32 kHz (not 24/48) at 24 fps. Reference images are supported (ref2va); reference them in the prompt as <Picture 1>, <Picture 2>."
 }

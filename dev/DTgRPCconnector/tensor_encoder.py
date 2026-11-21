@@ -56,8 +56,6 @@ def encode_image_to_tensor(image_path: str, compress: bool = True) -> bytes:
     # Which is equivalent to: uint8 / 127.5 - 1.0
     float_array = (img_array.astype(np.float32) / 127.5) - 1.0
 
-    print(f"[ENCODER] Input value range: [{float_array.min():.6f}, {float_array.max():.6f}]")
-
     # Build CCV tensor header (68 bytes = 17 x uint32)
     header = bytearray(HEADER_SIZE)
 

@@ -108,6 +108,7 @@ class ModelMetadata:
             # Other modern image models
             'ernie_image': 64,
             'moss_image': 64,
+            'minimax_h3_image': 64,
             'cosmos2.5_2b': 64,
             'cosmos2.5_2.9b': 64,
             'ideogram_4': 64,

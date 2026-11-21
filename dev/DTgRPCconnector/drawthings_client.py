@@ -87,6 +87,21 @@ SCHEDULER_MAP = {
 }
 
 
+# The gRPC server returns serialized CCV NNC tensors (fpzip-compressed or
+# uncompressed float16), not PNG. These magics let the save helpers tell a
+# tensor response apart from an already-encoded image (PNG/JPEG passthrough).
+TENSOR_HEADER_SIZE = 68
+_MAGIC_UNCOMPRESSED = 0
+_MAGIC_FPZIP = 1012247
+
+
+def _is_tensor_blob(data: bytes) -> bool:
+    """Return True if ``data`` looks like a CCV NNC tensor rather than PNG/JPEG."""
+    if len(data) < TENSOR_HEADER_SIZE:
+        return False
+    return int.from_bytes(data[:4], "little") in (_MAGIC_UNCOMPRESSED, _MAGIC_FPZIP)
+
+
 @dataclass
 class LoRAConfig:
     """Configuration for a LoRA adapter.
@@ -642,15 +657,13 @@ class DrawThingsClient:
             enable_compression: Enable gzip compression for requests/responses.
             ssl_cert_path: Path to SSL certificate file (for self-signed certs).
             keepalive_time_ms: Interval between keepalive pings.
-            keepalive_timeout_ms: How long to wait for a ping ack before the
-                connection is considered dead.
+            keepalive_timeout_ms: Time to wait for a ping ack.
         """
         self.server_address = server_address
 
-        # Conservative keepalive defaults. The previous settings (permit pings
-        # without calls, unlimited pings without data, 10 s min interval) make
-        # gRPC servers answer GOAWAY "too_many_pings"; on a busy Draw Things
-        # server that surfaces as "Stream removed (Socket closed)".
+        # Conservative keepalive: the aggressive defaults (pings without calls,
+        # unlimited pings without data) invite GOAWAY "too_many_pings", which
+        # surfaces as "Stream removed (Socket closed)" mid-generation.
         options = [
             ("grpc.max_send_message_length", 32 * 1024 * 1024),
             ("grpc.max_receive_message_length", 32 * 1024 * 1024),
@@ -1023,25 +1036,6 @@ class DrawThingsClient:
 
         return GenerationResult(images=generated_images, audio=generated_audio)
 
-    @classmethod
-    def decode_audio(cls, audio_chunks) -> Optional[bytes]:
-        """Decode GenerationResult.audio into one interleaved float32 PCM buffer.
-
-        Each entry is a reassembled fpzip-compressed CCV tensor
-        (shape (channels, samples), 48 kHz for LTX). Entries that fail tensor
-        decoding are passed through as raw PCM. Returns None when empty.
-        """
-        from tensor_decoder import decode_audio_tensor
-
-        pcm_parts = []
-        for entry in audio_chunks or []:
-            try:
-                pcm, _, _ = decode_audio_tensor(entry)
-                pcm_parts.append(pcm)
-            except ValueError:
-                pcm_parts.append(entry)
-        return b"".join(pcm_parts) if pcm_parts else None
-
     def generate_image(
         self,
         prompt: str,
@@ -1114,8 +1108,12 @@ class DrawThingsClient:
     ) -> List[str]:
         """Save generated images to disk.
 
+        Tensor responses (the gRPC server returns CCV tensors, not PNG) are
+        decoded to real PNGs. 4-channel tensors — e.g. Qwen Image 2.1 RGBA
+        output — are saved as RGBA PNGs so the alpha channel is preserved.
+
         Args:
-            images: List of image data as bytes
+            images: List of image data as bytes (CCV tensor or encoded image)
             output_dir: Directory to save images
             prefix: Filename prefix
 
@@ -1130,12 +1128,36 @@ class DrawThingsClient:
             filename = f"{prefix}_{i + 1}.png"
             filepath = output_path / filename
 
-            with open(filepath, "wb") as f:
-                f.write(image_data)
+            if _is_tensor_blob(image_data):
+                from tensor_decoder import tensor_to_pil
+
+                tensor_to_pil(image_data).save(filepath)
+            else:
+                with open(filepath, "wb") as f:
+                    f.write(image_data)
 
             saved_files.append(str(filepath))
 
         return saved_files
+
+    @classmethod
+    def decode_audio(cls, audio_chunks) -> Optional[bytes]:
+        """Decode GenerationResult.audio into one interleaved float32 PCM buffer.
+
+        Each entry is a reassembled fpzip-compressed CCV tensor
+        (shape (channels, samples)). Entries that fail tensor decoding are
+        passed through as raw PCM. Returns None when empty.
+        """
+        from tensor_decoder import decode_audio_tensor
+
+        pcm_parts = []
+        for entry in audio_chunks or []:
+            try:
+                pcm, _, _ = decode_audio_tensor(entry)
+                pcm_parts.append(pcm)
+            except ValueError:
+                pcm_parts.append(entry)
+        return b"".join(pcm_parts) if pcm_parts else None
 
     @classmethod
     def mux_audio_into_video(
@@ -1149,26 +1171,20 @@ class DrawThingsClient:
 
         Sanitizes the audio (NaN/Inf removal, clamping, duration matching),
         writes an intermediate WAV so ffmpeg can auto-detect the format, and
-        remuxes video (stream copy) + AAC audio into video_path. On failure,
-        the original frames-only video is restored.
+        remuxes video (stream copy) + AAC audio. On failure the frames-only
+        video is restored.
 
-        Args:
-            video_path: Path to an existing video file (modified in place)
-            audio: Decoded float32 PCM bytes (see decode_audio_tensor)
-            audio_sample_rate: Sample rate of the audio (default 48000)
-            video_duration: Target duration in seconds for trimming/padding
-
-        Returns:
-            The video path
+        Deliberately does NOT pass ``-shortest``: with ``-c:v copy`` it
+        truncates the video tail (measured 73 -> 70 frames) because the AAC
+        encoder lags. The audio is already trimmed/padded to the video
+        duration, so it is unnecessary when the duration is known.
         """
         import imageio_ffmpeg
         import struct
 
         video = Path(video_path)
 
-        arr = np.frombuffer(
-            audio[: (len(audio) // 4) * 4], dtype=np.float32
-        ).copy()
+        arr = np.frombuffer(audio[: (len(audio) // 4) * 4], dtype=np.float32).copy()
         if arr.size == 0:
             print("Warning: Audio is empty, skipping mux.")
             return str(video)
@@ -1179,11 +1195,9 @@ class DrawThingsClient:
         if had_invalid:
             print("Warning: Sanitized invalid audio samples (NaN/Inf) before muxing.")
 
-        # ffmpeg's f32le/WAV decoder requires complete stereo frames
         if arr.size % 2 == 1:
             arr = np.append(arr, 0.0)
 
-        # Trim/pad to match video duration
         if video_duration > 0:
             expected = int(video_duration * audio_sample_rate * 2)
             if arr.size > expected:
@@ -1200,8 +1214,6 @@ class DrawThingsClient:
         temp_video = video.with_suffix(".temp" + video.suffix)
         video.rename(temp_video)
 
-        # Intermediate WAV (IEEE float 32-bit stereo) lets ffmpeg auto-detect
-        # the format; raw f32le stdin piping requires perfect alignment.
         temp_audio = video.with_suffix(".temp.wav")
         data_size = len(clean_audio)
         byte_rate = audio_sample_rate * 4 * 2
@@ -1239,18 +1251,12 @@ class DrawThingsClient:
                 "-c:a",
                 "aac",
             ]
-            # Audio was already trimmed/padded to the video duration above, so
-            # -shortest is unnecessary. Worse, with stream copy it truncates the
-            # tail of the video (measured: 73 frames -> 70) because the AAC
-            # encoder lags behind the video stream. Only use it when the video
-            # duration is unknown.
             if video_duration <= 0:
                 cmd.append("-shortest")
             cmd.append(str(video))
             subprocess.run(cmd, check=True)
             temp_video.unlink(missing_ok=True)
         except Exception:
-            # Restore frames-only video on failure
             if not video.exists() and temp_video.exists():
                 temp_video.rename(video)
             raise
@@ -1268,47 +1274,30 @@ class DrawThingsClient:
         audio_sample_rate: int = 24000,
         frame_decoder: Optional[Callable] = None,
     ) -> str:
-        """Assemble video frames into a playable video file.
+        """Assemble decoded video frames into a playable video file.
 
-        Uses imageio for frame muxing and FFmpeg (via imageio-ffmpeg) for audio
-        muxing. Falls back to frame-only output if imageio is unavailable.
+        Uses imageio for frame muxing and FFmpeg (via imageio-ffmpeg) for audio muxing.
+        Falls back to frame-only output if imageio is unavailable.
 
         Args:
-            frames: List of frame blobs. Raw CCV tensor chunks require a
-                frame_decoder (e.g. tensor_decoder.tensor_to_pil); PNG/JPEG
-                bytes can be read without one.
+            frames: List of frame data — CCV tensors from generate_media()
+                    (decoded automatically) or already-encoded PNG bytes
             output_path: Path for output video file (e.g. "output.mp4")
             fps: Frames per second
             audio: Optional list of audio tensor chunks from GenerationResult.audio
-                   (fpzip-compressed CCV tensors), or a single pre-decoded bytes
-                   object. Decoded to interleaved float32 PCM before muxing.
+                   (fpzip-compressed CCV tensors, shape (channels, samples)).
+                   They are decoded to interleaved float32 PCM before muxing.
+                   Pass a single pre-decoded bytes object to skip decoding.
             audio_sample_rate: Sample rate for the audio. 48000 for LTX 2.3,
-                   24000 for most other models (upstream ModelZoo default).
-            frame_decoder: Optional callable converting each frame blob to a
-                PIL Image or numpy array. Required for CCV tensor frames.
+                   32000 for MiniMax H3, 24000 for other models.
+            frame_decoder: Optional callable turning a frame blob into a PIL
+                   Image/numpy array. Tensors are auto-detected otherwise.
 
         Returns:
             Path to the saved video file
         """
         output = Path(output_path)
         output.parent.mkdir(parents=True, exist_ok=True)
-
-        # Normalize audio to a pre-decoded bytes buffer for muxing
-        mux_audio: Optional[bytes] = None
-        if audio:
-            if isinstance(audio, (bytes, bytearray)):
-                mux_audio = bytes(audio)
-            else:
-                from tensor_decoder import decode_audio_tensor
-
-                pcm_parts = []
-                for entry in audio:
-                    try:
-                        pcm, _, _ = decode_audio_tensor(entry)
-                        pcm_parts.append(pcm)
-                    except ValueError:
-                        pcm_parts.append(entry)
-                mux_audio = b"".join(pcm_parts)
 
         # Try imageio first
         try:
@@ -1319,24 +1308,35 @@ class DrawThingsClient:
             for frame_bytes in frames:
                 if frame_decoder is not None:
                     frame = frame_decoder(frame_bytes)
+                    if not isinstance(frame, np.ndarray):
+                        frame = np.asarray(frame.convert("RGB"))
+                elif _is_tensor_blob(frame_bytes):
+                    # Frames come back as CCV tensors; decode to pixels.
+                    # Video codecs drop alpha, so flatten RGBA to RGB.
+                    import numpy as _np
+                    from tensor_decoder import tensor_to_pil
+
+                    frame = _np.asarray(tensor_to_pil(frame_bytes).convert("RGB"))
                 else:
                     frame = imageio.imread(frame_bytes)
-                if not isinstance(frame, np.ndarray):
-                    frame = np.asarray(frame.convert("RGB"))
-                elif frame.dtype != np.uint8:
-                    frame = (frame.clip(0, 255)).astype(np.uint8)
                 writer.append_data(frame)
             writer.close()
 
             # If audio is provided, decode tensors and mux it in
-            if mux_audio:
+            if audio:
                 try:
-                    self.mux_audio_into_video(
-                        video_path=str(output),
-                        audio=mux_audio,
-                        audio_sample_rate=audio_sample_rate,
-                        video_duration=len(frames) / max(fps, 1),
-                    )
+                    pcm = self.decode_audio(audio) if not isinstance(
+                        audio, (bytes, bytearray)
+                    ) else bytes(audio)
+                    if not pcm:
+                        print("Warning: no decodable audio, keeping frames-only video.")
+                    else:
+                        type(self).mux_audio_into_video(
+                            video_path=str(output),
+                            audio=pcm,
+                            audio_sample_rate=audio_sample_rate,
+                            video_duration=len(frames) / max(fps, 1),
+                        )
                 except Exception as e:
                     print(f"Warning: Could not mux audio: {e}")
                     # Keep frames-only video

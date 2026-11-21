@@ -31,7 +31,7 @@ Access: http://localhost:7860
 
 - `app.py` — Main Gradio app (~3500 lines). Video tab wired near the end (`create_ui`).
 - `settings_manager.py` — Config persistence (JSON).
-- `dev/DTgRPCconnector/` — gRPC client. **Canonical copy synced from dtline repo (calendar-versioned, v26.0910.1+)**. `drawthings_client.py` (client + audio muxing), `tensor_decoder.py` (`tensor_to_pil`, `decode_audio_tensor`), `GenerationConfiguration.py` (FlatBuffer schema; slots 86+ = newer server fields).
+- `dev/DTgRPCconnector/` — gRPC client. **Synced from dtline (latest: 27c4b31 / 20261121.2)**; keep our audio-mux + keepalive patches when re-syncing: `save_images()` decodes CCV tensors (incl. RGBA), `save_video()` auto-detects tensors, `decode_audio()`/`mux_audio_into_video()` are ours. `drawthings_client.py` (client + audio muxing), `tensor_decoder.py` (`tensor_to_pil`, `decode_audio_tensor`), `GenerationConfiguration.py` (FlatBuffer schema; slots 86+ = newer server fields).
 - `dev/ModuLLe/` — LLM provider abstraction (Ollama/LM Studio/OpenAI/Gemini/Claude), synced from github.com/Alexthestampede/ModuLLe (calendar-versioned). Editable install; its pyproject pulls `beautifulsoup4`, `html2text`, `ddgs`, `lxml` for web/tools modules (`modulle/__init__` imports lazily, so the app works without them).
 - `settings/config.json` — User settings (gitignored, auto-created); reference: `config.example.json`.
 - `settings/presets/*.json` — Model presets. **Our schema stores Draw Things keys** (`guidanceScale`, `hiresFix`, `resolutionDependentShift`) — dtline uses different keys (`recommended_cfg`, `hires_fix`); don't mix.
