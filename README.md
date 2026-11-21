@@ -2,7 +2,7 @@
 
 AI-powered prompt engineering and image generation workbench. Connect vision-enabled LLMs (LM Studio, Ollama) with Draw Things gRPC server for intelligent prompt manipulation and high-quality image generation.
 
-![Version](https://img.shields.io/badge/version-20261003.1-blue)
+![Version](https://img.shields.io/badge/version-20261122.1-blue)
 ![Python](https://img.shields.io/badge/python-3.8+-green)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
@@ -23,6 +23,7 @@ AI-powered prompt engineering and image generation workbench. Connect vision-ena
 - **Smart Shift**: Official exponential formula from Draw Things for optimal quality
 - **Negative Prompt Presets**: Quick-select common negative prompts (Realistic, Anime/Pony, Simple, None)
 - **Official Presets**: 6 pre-configured presets from Draw Things (FLUX, Schnell, Pony, SDXL, SD1.5, Qwen, Chroma)
+- **Actor Reference Sheets**: One photo → face close-up + three-view turnaround on white, using the Cutscene Artist Storyflow prompt and the photo as an edit-model reference
 - **Real-time Progress**: Live step tracking during generation
 - **Auto-save**: Descriptive filenames with full PNG metadata embedding
 
@@ -193,6 +194,22 @@ the rain, purple and pink light reflecting off wet pavement..."
 ```
 20250129_154230_FLUX.1_[dev]_peaceful_garden_sunset_s1234567890.png
 ```
+
+### Make an Actor Reference Sheet
+Turn one photo into a reusable character sheet: face close-up on the left,
+three-view turnaround on the right, white background, 2048×1152. This is
+Cutscene Artist's Storyflow prompt method, run without the Storyflow plugin.
+
+1. Open the **🧑‍🎨 Actor Sheet** tab
+2. Upload a headshot (or use the webcam on a phone)
+3. Choose an **edit/kontext** model (Qwen Image 2.1, FLUX Klein) — a text-only
+   checkpoint never sees the reference photo
+4. Click **Describe actor from photo** to fill "The actor is …"
+5. Pick a costume (or 🎲 Random), tweak the auto-built prompt if you like
+6. **Generate actor sheet** — the PNG lands in `outputs/`
+
+Use the finished sheet as a Moodboard/reference image for LTX/H3 video or
+edit runs, so the same actor survives every shot.
 
 ## 📁 Project Structure
 

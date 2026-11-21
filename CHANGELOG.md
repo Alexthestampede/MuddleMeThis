@@ -1,5 +1,25 @@
 # Changelog
 
+## 20261122.1 - Actor Reference Sheet
+
+### New
+- **Actor Sheet** tab: one photo → standardized character reference sheet
+  (face close-up left, three-view turnaround right, white background,
+  2048×1152). Prompt is Cutscene Artist's 4-section method; the photo rides
+  along as an edit/kontext reference image.
+- **Describe actor from photo** uses the vision model for section 2
+  ("The actor is …"), leaving clothes and scene out.
+- Costume field seeded with the demo's wildcard list plus a 🎲 randomiser;
+  the assembled prompt stays editable before rendering.
+- Renders through `generate_media(reference_images=...)` and saves a PNG with
+  Draw Things XMP metadata alongside the other outputs.
+
+### Notes
+- Needs an edit/kontext model (Qwen Image 2.1, FLUX Klein). A text-only
+  checkpoint has no path for the photo.
+- Drop the finished sheet on the Moodboard (or use it as a reference image)
+  for LTX/H3 video and edit runs.
+
 ## v0.2.0 - Complete UI Refactor (2024-12-28)
 
 ### ✅ All Requested Improvements Implemented
