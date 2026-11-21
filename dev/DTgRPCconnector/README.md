@@ -6,20 +6,25 @@ A comprehensive Python client library for the [Draw Things](https://drawthings.a
 
 - **Text-to-Image Generation**: Generate images from text prompts across all supported architectures
 - **Edit/Kontext Models**: Full support for Flux Klein and similar reference-image models with correct float16 tensor encoding
+- **Reference Images / Moodboard**: Multiple reference images for edit models (FLUX.2 Klein) and IP-Adapter style conditioning
+- **Video Generation with Audio**: LTX 2.3 support via `generate_media()` — captures synchronized frames + stereo audio, muxed with `save_video()`
 - **Inpainting**: Mask-based inpainting with `mask_image` support (white = inpaint, black = preserve)
 - **ControlNet**: Complete ControlNet support via `ControlNetConfig` with 18 input types
 - **LoRA in FlatBuffer**: Pass LoRA adapters directly in the generation config via `LoRAConfig`
 - **Smart Model Detection**: Automatically fetches latent size and metadata from server
-- **Wide Model Support**: SD 1.5, SD 2.x, SDXL, FLUX, FLUX Kontext, Z-Image, Qwen, Stable Video Diffusion, and more
+- **Wide Model Support**: SD 1.5, SD 2.x, SDXL, FLUX (incl. FLUX.2/FLUX.3 Klein), Z-Image, Qwen, MOSS Image, Cosmos 2.5, MiniMax H3 Image, Stable Video Diffusion, LTX 2.3, and more
 - **Tensor Encoding/Decoding**: Proper handling of both fpzip-compressed and uncompressed float16 tensors
 - **Model Discovery**: List and browse available models and LoRAs
 - **Streaming Progress**: Real-time progress updates during generation
-- **Advanced Config**: FLUX guidance embed, separate text encoders, TeaCache, tiled diffusion/decoding, video generation, stage 2, causal inference, and more
+- **Advanced Config**: FLUX guidance embed, separate text encoders, TeaCache, tiled diffusion/decoding, video generation, stage 2, causal inference, compression artifacts, and more
 
 ## Requirements
 
 ```bash
 pip install grpcio grpcio-tools flatbuffers fpzip Pillow numpy
+
+# Optional, for video assembly (LTX 2.3)
+pip install imageio imageio-ffmpeg
 ```
 
 ## TLS Certificate — Required for Secure Connections
@@ -166,6 +171,65 @@ with DrawThingsClient("server.example.com:7859", insecure=False, verify_ssl=Fals
     images = client.generate_image(prompt="a portrait in my style", config=config)
 ```
 
+### Multiple Reference Images (Moodboard)
+
+Edit models (FLUX.2 Klein, etc.) can see and combine the content of multiple reference images:
+
+```python
+from drawthings_client import DrawThingsClient, ImageGenerationConfig, ReferenceImage
+
+config = ImageGenerationConfig(
+    model="flux_2_klein_4b_q6p.ckpt",
+    steps=20,
+    width=1024,
+    height=1024,
+    cfg_scale=1.0,
+    scheduler="Euler A Trailing",
+    strength=1.0,
+    guidance_embed=3.5,
+)
+
+with DrawThingsClient("server.example.com:7859", insecure=False, verify_ssl=False) as client:
+    images = client.generate_image(
+        prompt="the person from reference 3, wearing the clothes from reference 2, on the beach from reference 1",
+        config=config,
+        reference_images=[
+            ReferenceImage(image="beach.jpg", weight=0.33, hint_type="shuffle"),
+            ReferenceImage(image="clothes.jpg", weight=0.33, hint_type="shuffle"),
+            ReferenceImage(image="person.jpg", weight=0.34, hint_type="shuffle"),
+        ],
+    )
+```
+
+### Video with Audio (LTX 2.3)
+
+```python
+from drawthings_client import DrawThingsClient, ImageGenerationConfig
+
+config = ImageGenerationConfig(
+    model="ltx_2_3_540p_q8p.ckpt",
+    steps=30,
+    width=960,
+    height=540,
+    cfg_scale=1.0,
+    scheduler="Euler A",
+    num_frames=121,
+    fps_id=24,
+)
+
+with DrawThingsClient("server.example.com:7859", insecure=False, verify_ssl=False) as client:
+    result = client.generate_media(
+        prompt="a cinematic drone shot flying over a tropical beach at sunset",
+        config=config,
+    )
+    client.save_video(
+        result.images,
+        output_path="output/video.mp4",
+        fps=24,
+        audio=result.audio if result.audio else None,
+    )
+```
+
 ---
 
 ## Python API Reference
@@ -195,17 +259,50 @@ images: List[bytes] = client.generate_image(
     input_image=None,               # PIL Image, file path str, or bytes
     mask_image=None,                # PIL Image, file path str, or bytes
     hints=None,                     # List of HintProto for ControlNet hints
+    reference_images=None,          # List of ReferenceImage for moodboard
     metadata_override=None,
     progress_callback=None,         # Callable[[str, int], None]
     preview_callback=None,          # Callable[[bytes], None]
 )
 ```
 
-The returned list contains PNG bytes for each generated image. Save them with:
+The returned list contains CCV tensor bytes; `save_images()` decodes them to PNG. 4-channel tensors (ARGB on the wire, normalized to RGBA — e.g. Qwen Image 2.1) are saved with their alpha channel intact. Save them with:
 
 ```python
 client.save_images(images, output_dir="output", prefix="generated")
 ```
+
+> **Note:** `generate_image()` discards any generated audio. For video models like LTX 2.3, use `generate_media()` instead.
+
+#### generate_media()
+
+```python
+from drawthings_client import GenerationResult
+
+result: GenerationResult = client.generate_media(
+    prompt="...",
+    config=config,
+    # ... same arguments as generate_image()
+)
+
+result.images   # List[bytes] — image / video frame data
+result.audio    # List[bytes] — audio chunks (empty for image models)
+```
+
+For LTX 2.3, assemble frames + audio into a playable video:
+
+```python
+client.save_video(
+    result.images,
+    output_path="output/video.mp4",
+    fps=24,
+    audio=result.audio if result.audio else None,
+)
+```
+
+`save_video()` requires `imageio` and `imageio-ffmpeg` (`pip install imageio imageio-ffmpeg`).
+
+**Audio is a tensor too.** Each entry in `result.audio` is a fpzip-compressed CCV tensor of shape `(channels, samples)` (stereo: `(2, N)`), float values in `[-1.0, 1.0]`, chunked exactly like image tensors. `save_video()` decodes them to interleaved float32 PCM and muxes via FFmpeg. Sample rates: **48 kHz for LTX 2.3**, 24 kHz for most other models (matching upstream `ModelZoo.audioSampleRateForModel`).
 
 ---
 
@@ -263,7 +360,7 @@ config = ImageGenerationConfig(
     upscaler_scale_factor=0,        # 0 = auto
     face_restoration="",
     refiner_model="",
-    refiner_start=0.7,
+    refiner_start=0.85,
 
     # --- Hires fix ---
     hires_fix=False,
@@ -301,7 +398,7 @@ config = ImageGenerationConfig(
     tea_cache=False,
     tea_cache_start=5,
     tea_cache_end=-1,               # -1 means end of steps
-    tea_cache_threshold=0.06,
+    tea_cache_threshold=0.2,
     tea_cache_max_skip_steps=3,
 
     # --- Causal inference ---
@@ -317,12 +414,20 @@ config = ImageGenerationConfig(
     # --- Shift ---
     shift=1.0,
 
-    # --- Video generation (Stable Video Diffusion) ---
+    # --- Video generation (Stable Video Diffusion / LTX) ---
     fps_id=5,
     motion_bucket_id=127,
     cond_aug=0.02,
     start_frame_cfg=1.0,
     num_frames=14,
+    compression_artifacts=0,        # CompressionMethod: Disabled=0, H264=1, H265=2, Jpeg=3
+    compression_artifacts_quality=43.1,
+    color_calibration=0,            # ColorCalibration: Disabled=0, Lab=1
+    expand_prompt_to_json=False,
+    shift_for_audio=3.0,            # LTX audio shift
+    uses_sol_attention=False,       # Sol attention (FLUX.2 Klein etc.)
+    sol_attention_start=2,
+    sol_attention_tau=0.5,
 
     # --- Misc ---
     zero_negative_prompt=False,
@@ -408,6 +513,22 @@ ControlNetConfig(
 
 ---
 
+### ReferenceImage
+
+```python
+from drawthings_client import ReferenceImage
+
+ReferenceImage(
+    image="reference.jpg",  # PIL Image, file path str, or bytes
+    weight=1.0,             # 0.0–1.0 influence weight
+    hint_type="shuffle",    # "shuffle" (edit models), "ipadapterplus", "ipadapterfull"
+)
+```
+
+Pass a list to `generate_image(..., reference_images=[...])`. For edit/kontext models use `hint_type="shuffle"` with `strength=1.0`.
+
+---
+
 ## Technical Details
 
 ### Understanding Scale Factors
@@ -454,6 +575,16 @@ Draw Things uses the CCV NNC tensor format with a 68-byte header followed by pix
 - Uncompressed format: raw float16 bytes, NHWC row-major order
 - Compressed format: fpzip-compressed float32 array
 
+> **⚠️ Important: the server likely outputs fpzip-compressed tensors for everything.**
+> Unless the server is started with `--no-response-compression`, all response data —
+> generated images, video frames, masks, hints — arrives as fpzip-compressed float32
+> tensors (header magic `1012247`). `tensor_decoder.decode_tensor()` auto-detects the
+> format from the header magic and handles both cases transparently, but **fpzip must
+> be installed** or decoding will raise:
+> `"Response is compressed but fpzip is not available"`.
+> Input tensors you *send* should remain uncompressed float16 for edit/kontext models
+> (see below); the compression distinction only matters on the response side.
+
 **Why uncompressed float16 matters for edit/kontext models:**
 
 The Swift reference client (`euphoriacyberware-ai/DT-gRPC-Swift-Client`) encodes input images as uncompressed float16. This matches what the Draw Things server expects for identity preservation in kontext and reference-image workflows. The fpzip-compressed float32 path works for standard img2img but can degrade quality in edit models because the quantization path differs from the native encoding path.
@@ -496,6 +627,15 @@ config = ImageGenerationConfig(
 )
 ```
 
+### Video Generation / LTX Notes
+
+- **Audio**: The gRPC server returns `generatedAudio` alongside frames for video models (LTX 2.x). `generate_media()` collects it; `generate_image()` silently discards it.
+- **Audio is a tensor**: fpzip-compressed CCV tensor, shape `(channels, samples)` (stereo `(2, N)`), values in `[-1.0, 1.0]`, chunked like images. `save_video()` decodes to interleaved float32 PCM and muxes via FFmpeg.
+- **Sample rate**: 48 kHz for LTX 2.3; 24 kHz default for other models (upstream `ModelZoo.audioSampleRateForModel`).
+- **LTX scale factors**: LTX models use different VAE ratios than image models — the server internally uses `startScaleFactor = 32` and doubles the scale. Pass pixel dimensions that are multiples of 64 (540p, 720p, etc.) to avoid reshape crashes.
+- **Frames are not a video**: The response contains individual decoded frames, not a multiplexed file. Use `save_video()` (or mux externally with FFmpeg).
+- **batch_count/batch_size are ignored for video models**: The server forces batch size to 1 for video models regardless of config.
+
 ### Model Architecture Detection
 
 The client automatically fetches latent size from server metadata:
@@ -515,10 +655,15 @@ Known automatic mappings:
 |---------------|-------------|--------------|
 | `*sd15*`, `*sd1.5*` | 64 | Stable Diffusion 1.5 |
 | `*xl*`, `*sdxl*` | 128 | Stable Diffusion XL |
-| `*flux*` | 64 | FLUX.1 |
+| `*flux*`, `*klein*` | 64 | FLUX.1 / FLUX.2 / FLUX.3 Klein |
 | `*z_image*` | 64 | Z-Image (FLUX VAE) |
-| `*qwen*` | 64 | Qwen Image |
-| `*klein*` | 64 | Flux Klein / Kontext |
+| `*qwen*` | 64 | Qwen Image / Qwen Image 2.1 (RGBA) |
+| `*moss_image*` | 64 | MOSS Image (FLUX-2 VAE) |
+| `*minimax_h3_image*` | 64 | MiniMax H3 Image (edit, 4096px) |
+| `*cosmos*` | 64 | Cosmos 2.5 (image model) |
+| `*ltx*` | 64 | LTX 2.x video |
+
+Qwen Image 2.1 can emit **4-channel** tensors. Draw Things orders those channels as **ARGB** (alpha first); `decode_tensor()` normalizes them to RGBA, `tensor_to_pil()` returns a PIL `RGBA` image, and `save_images()` / `save_tensor_image()` write PNGs that preserve alpha.
 
 If metadata is unavailable the client falls back to filename heuristics. Override with `--latent-size` if needed.
 
@@ -554,23 +699,26 @@ docker run -d \
 gRPC/
 ├── README.md
 ├── EXAMPLES.md
+├── AGENTS.md                    # Agent/contributor guidance
 ├── requirements.txt
 ├── __init__.py
-├── drawthings_client.py       # Main client: DrawThingsClient, ImageGenerationConfig,
-│                              #   LoRAConfig, ControlNetConfig
-├── model_metadata.py          # Model discovery / latent size detection
-├── tensor_decoder.py          # Decode CCV tensors to PNG
-├── tensor_encoder.py          # Encode images to CCV tensor format
-├── GenerationConfiguration.py # FlatBuffer schema (84 fields)
-├── LoRA.py                    # FlatBuffer LoRA table
-├── Control.py                 # FlatBuffer Control table + enums
-├── SamplerType.py             # Sampler enum
-├── imageService_pb2.py        # gRPC protobuf (generated)
-├── imageService_pb2_grpc.py   # gRPC stubs (generated)
+├── drawthings_client.py         # Main client: DrawThingsClient, ImageGenerationConfig,
+│                                #   LoRAConfig, ControlNetConfig, ReferenceImage, GenerationResult
+├── model_metadata.py            # Model discovery / latent size detection
+├── tensor_decoder.py            # Decode CCV tensors to PNG (auto-detects fpzip) + audio tensors
+├── tensor_encoder.py            # Encode images to CCV tensor format
+├── GenerationConfiguration.py   # FlatBuffer schema (86 fields)
+├── LoRA.py                      # FlatBuffer LoRA table
+├── Control.py                   # FlatBuffer Control table + enums
+├── SamplerType.py               # Sampler enum (incl. TCDTrailing)
+├── imageService_pb2.py          # gRPC protobuf (generated)
+├── imageService_pb2_grpc.py     # gRPC stubs (generated)
+├── imageService.proto           # Proto source (synced from draw-things-community)
 ├── examples/
-│   ├── generate_image.py      # CLI: text-to-image
-│   ├── list_models.py         # CLI: list server models/LoRAs
-│   └── example_usage.py      # Miscellaneous usage patterns
+│   ├── generate_image.py        # CLI: text-to-image
+│   ├── list_models.py           # CLI: list server models/LoRAs
+│   ├── generate_with_references.py  # CLI: moodboard/reference images
+│   └── add_moodboard.py         # Moodboard preparation helpers
 └── tests/
     └── test_*.py
 ```

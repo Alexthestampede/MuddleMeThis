@@ -108,6 +108,91 @@ with DrawThingsClient("server.example.com:7859", insecure=False, verify_ssl=Fals
     client.save_images(images, output_dir="output", prefix="landscape")
 ```
 
+### MOSS Image (1024×1024)
+
+MOSS Image (OpenMOSS) is a text-to-image model with a FLUX-2 VAE and a Qwen 3.5 text encoder. Upstream recommends **50 steps, guidance 3, shift 5**, and it can follow natural-language prompts, tag sequences, or JSON layouts for text placement.
+
+```python
+from drawthings_client import DrawThingsClient, ImageGenerationConfig
+
+config = ImageGenerationConfig(
+    model="moss_image_sft_q8p.ckpt",   # or moss_image_base_q8p.ckpt
+    steps=50,
+    width=1024,
+    height=1024,                       # defaultScale 16 → 1024px
+    cfg_scale=3.0,                     # text guidance
+    scheduler="Euler A Trailing",
+    shift=5.0,                         # MOSS recommended shift
+    expand_prompt_to_json=True,        # optional: JSON-layout prompts
+)
+
+with DrawThingsClient("server.example.com:7859", insecure=False, verify_ssl=False) as client:
+    images = client.generate_image(
+        prompt="a red vintage motorcycle parked in front of a neon-lit diner at night",
+        config=config,
+    )
+    client.save_images(images, output_dir="output", prefix="moss_motorcycle")
+```
+
+### FLUX.3 klein and Cosmos 2.5
+
+- **FLUX.3 klein** (`flux3_5b`) is a FLUX-family edit/reference model — use the same pattern as [Flux Klein / Kontext Edit](#flux-klein--kontext-edit): `strength=1.0` plus `input_image` or `reference_images`.
+- **Cosmos 2.5 (2B / 2.9B)** is exposed by Draw Things as an **image** model, not a video model: it is batch-enabled and does not use `num_frames`. Generate it like any text-to-image model (1024×1024 typical).
+
+```python
+from drawthings_client import DrawThingsClient, ImageGenerationConfig
+
+config = ImageGenerationConfig(
+    model="cosmos_2.5_2b_q8p.ckpt",    # use the filename the server advertises
+    steps=30,
+    width=1024,
+    height=1024,
+    cfg_scale=4.0,                     # tune to taste
+    scheduler="Euler A Trailing",
+)
+
+with DrawThingsClient("server.example.com:7859", insecure=False, verify_ssl=False) as client:
+    images = client.generate_image(
+        prompt="aerial view of a futuristic city at dusk, cinematic",
+        config=config,
+    )
+    client.save_images(images, output_dir="output", prefix="cosmos_city")
+```
+
+> Model filenames come from the server's model browser — check them with `python examples/list_models.py`.
+
+### MiniMax H3 Image (4096×4096, edit model)
+
+MiniMax H3 Image (`minimax_h3_image`) is a kontext-style **edit** model that uses the canvas/moodboard images as references, addressed as `<Picture 1>`, `<Picture 2>`, … in the prompt. It is distilled to **6 steps without guidance**: use Text Guidance 1, Shift 3, **DDIM Trailing**, and 4–16 MP (upstream defaults to 4096×4096).
+
+```python
+from drawthings_client import DrawThingsClient, ImageGenerationConfig, ReferenceImage
+
+config = ImageGenerationConfig(
+    model="minimax_h3_image_i4x.ckpt",   # or the q8p variant
+    steps=6,
+    width=4096,
+    height=4096,               # 4–16 MP; upstream defaults to 4096×4096
+    cfg_scale=1.0,             # distilled without guidance
+    scheduler="DDIM Trailing",
+    shift=3.0,
+    strength=1.0,              # required for kontext/edit models
+)
+
+with DrawThingsClient("server.example.com:7859", insecure=False, verify_ssl=False) as client:
+    images = client.generate_image(
+        prompt="<Picture 1> wearing the jacket from <Picture 2>, studio lighting",
+        config=config,
+        reference_images=[
+            ReferenceImage(image="person.png", weight=1.0, hint_type="shuffle"),
+            ReferenceImage(image="jacket.png", weight=1.0, hint_type="shuffle"),
+        ],
+    )
+    client.save_images(images, output_dir="output", prefix="h3_edit")
+```
+
+> At 4096×4096 memory use is high — start at 2048×2048 while iterating, then scale up.
+
 ### Reproducible Results with Seed
 
 ```python
@@ -286,6 +371,8 @@ with DrawThingsClient("server.example.com:7859", insecure=False, verify_ssl=Fals
     )
     client.save_images(images, output_dir="output", prefix="autumn")
 ```
+
+**Qwen Image 2.1 outputs 4-channel ARGB.** The first channel carries alpha in the wire tensor: `generate_image()` returns the raw 4-channel tensor, `decode_tensor()` normalizes it to RGBA, and `save_images()` / `tensor_to_pil()` decode it to an RGBA PNG, so transparency survives to disk. `decode_tensor()` reports the channel count if you need to branch on it.
 
 ---
 
@@ -794,7 +881,7 @@ config = ImageGenerationConfig(
     tea_cache=True,
     tea_cache_start=5,           # start caching after step 5
     tea_cache_end=-1,            # -1 means run until end
-    tea_cache_threshold=0.06,    # similarity threshold; higher = more aggressive
+    tea_cache_threshold=0.2,     # default; lower = more conservative skipping
     tea_cache_max_skip_steps=3,  # max consecutive skipped steps
 )
 
@@ -873,7 +960,7 @@ with DrawThingsClient("server.example.com:7859", insecure=False, verify_ssl=Fals
         config=config,
         input_image="first_frame.png",
     )
-    # Returns individual frame tensors; assemble into video externally
+    # Returns individual decoded frames; use save_video() to mux into an MP4
     client.save_images(images, output_dir="output/frames", prefix="frame")
 ```
 
@@ -912,16 +999,15 @@ with DrawThingsClient("server.example.com:7859", insecure=False, verify_ssl=Fals
         client.save_video(
             result.images,
             output_path="output/ltx_video.mp4",
-            fps=25,  # LTX output is fixed at 25 fps
-            audio=client.decode_audio(result.audio),
+            fps=24,
+            audio=result.audio if result.audio else None,
         )
 ```
 
 **Notes:**
 - LTX 2.3 VAE uses different latent ratios than image models; the server internally computes `startScaleFactor = 32` and doubles the scale. Pass pixel dimensions that are multiples of 64 (e.g., 540p, 720p) to avoid reshape crashes.
 - `generate_image()` will also return LTX frames but silently discards the audio track. Use `generate_media()` for full audio-video capture.
-- Audio chunks arrive as CCV tensor blobs (68-byte header + fpzip-compressed float32), the same wrapper used for video frames. Decode each chunk with `decode_audio()` / `decode_audio_blob()` **before** joining or interpreting as PCM — joining raw blobs produces noise. `save_video()` does NOT decode for you; pass `client.decode_audio(result.audio)`.
-- LTX output frame rate is fixed at 25 fps regardless of `fps_id`.
+- **Audio is a tensor too**: each `result.audio` entry is a fpzip-compressed CCV tensor of shape `(channels, samples)` with float values in [-1, 1] — same format as image tensors. `save_video()` decodes them to interleaved float32 PCM automatically. LTX 2.3 outputs at 48 kHz (24 kHz for most other models).
 
 ### Stage 2 Models
 
@@ -1070,6 +1156,14 @@ Pixel values:
 
 This format matches the Swift reference client's `ImageHelpers.imageToDTTensor()` implementation from [euphoriacyberware-ai/DT-gRPC-Swift-Client](https://github.com/euphoriacyberware-ai/DT-gRPC-Swift-Client).
 
+> **⚠️ Response tensors are (likely) fpzip-compressed.** Unless the server is started
+> with `--no-response-compression`, the Draw Things gRPC server sends **all** response
+> data (images, video frames, masks, hints) as fpzip-compressed float32 tensors —
+> header magic `[0] = 1012247`. `tensor_decoder.decode_tensor()` auto-detects this
+> from the magic value and decompresses transparently, but `fpzip` must be installed.
+> Note the direction: response data is compressed, while **input images you send**
+> stay uncompressed float16 (for edit/kontext fidelity).
+
 ### Batch Generation
 
 ```python
@@ -1176,3 +1270,10 @@ Some model/configuration combinations cause the server to crash. Try:
 - Verify the ControlNet model filename is correct and the file exists on server
 - Confirm `input_override` matches the type of guide image you are providing
 - Try `weight=1.0` and `guidance_start=0.0, guidance_end=1.0` first, then tune
+
+### Video generation issues (LTX)
+
+- `save_video()` raises `ImportError` — install: `pip install imageio imageio-ffmpeg`
+- No audio in output — confirm you used `generate_media()` (`generate_image()` discards audio) and passed `audio=result.audio`
+- Audio sounds like noise — audio entries are fpzip CCV tensors; `save_video()` decodes them automatically, but if you mux externally, decode with `tensor_decoder.decode_audio_tensor()` first
+- Server crash / reshape errors — use dimensions in multiples of 64 (540p, 720p); LTX uses different VAE ratios and the server forces batch size 1

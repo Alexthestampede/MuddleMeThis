@@ -30,7 +30,9 @@ def decode_tensor(data: bytes) -> Tuple[np.ndarray, int, int, int]:
         
     Returns:
         Tuple of (image_array, width, height, channels)
-        image_array is uint8 RGB in range [0, 255]
+        image_array is uint8 RGB for 3-channel tensors or RGBA for 4-channel
+        tensors, in range [0, 255]. Draw Things sends 4-channel image tensors in
+        ARGB order; this function normalizes them to RGBA.
     """
     # Read header as 32-bit unsigned integers
     header = struct.unpack_from('<32I', data, 0)
@@ -42,14 +44,6 @@ def decode_tensor(data: bytes) -> Tuple[np.ndarray, int, int, int]:
 
     is_compressed = (magic == MAGIC_COMPRESSED)
 
-    # DEBUG: Log full header to understand server format
-    print(f"[DECODER] Magic: {magic}, Height: {height}, Width: {width}, Channels: {channels}")
-    print(f"[DECODER] Header bytes 0-4: {header[0:5]}")
-    
-    print(f"Image: {width}×{height}×{channels}")
-    print(f"Compressed: {is_compressed}")
-    print(f"Input size: {len(data):,} bytes")
-    
     # Get float data
     if is_compressed:
         if not FPZIP_AVAILABLE:
@@ -57,7 +51,6 @@ def decode_tensor(data: bytes) -> Tuple[np.ndarray, int, int, int]:
         
         # Decompress fpzip data (after 68-byte header)
         compressed_data = data[HEADER_SIZE:]
-        print(f"Decompressing {len(compressed_data):,} bytes...")
         
         # fpzip.decompress returns float32 with shape (1, height, width, channels)
         float_data = fpzip.decompress(compressed_data, order='C')
@@ -84,7 +77,13 @@ def decode_tensor(data: bytes) -> Tuple[np.ndarray, int, int, int]:
     # CRITICAL: Must use 127.5 for proper symmetry with encoder
     # -1.0 → 0, 0.0 → 127.5 → 128, 1.0 → 255
     image_array = ((tensor + 1.0) * 127.5).clip(0, 255).astype(np.uint8)
-    
+
+    if channels == 4:
+        # Draw Things uses ARGB for 4-channel image tensors (alpha first).
+        # Treating them as RGBA moves alpha into red and washes out the image
+        # (visible with Qwen Image 2.1). Normalize to RGBA for PIL/PNG.
+        image_array = image_array[:, :, [1, 2, 3, 0]]
+
     return image_array, width, height, channels
 
 def tensor_to_pil(data: bytes) -> Image.Image:
