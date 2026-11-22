@@ -66,3 +66,6 @@ dev/*.txt
 dev/*.png
 dev/*.swift
 dev/*.json
+
+# Cloned reference checkout (not a submodule)
+dev/draw-things-community/
