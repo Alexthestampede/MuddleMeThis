@@ -92,6 +92,7 @@ class AppState:
         self.available_models = []
         self.available_loras = []
         self.model_catalog = []  # enriched model entries (see model_catalog.py)
+        self.preset_tiling = {}  # tiling requested by the active Generate preset
         self.current_model_base_resolution = 1024  # Default
         self.model_name_to_file = {}  # Maps display names → filenames
         self.lora_name_to_file = {}  # Maps display names → filenames
@@ -1394,6 +1395,7 @@ def on_preset_selected(
 ]:
     """When a preset is selected, apply its settings"""
     if preset_name == "Custom (no preset)" or not preset_name:
+        state.preset_tiling = {}
         return (
             gr.update(),
             gr.update(),
@@ -1414,6 +1416,14 @@ def on_preset_selected(
 
     preset = settings.get_model_preset(preset_name)
     if preset:
+        # Tiling lives on the preset, not in the UI: 16MP-class models need it
+        # and the FlatBuffer takes scale units (pixels // 64).
+        state.preset_tiling = {
+            "enabled": bool(preset.get("tiledDecoding", False)),
+            "tile_px": int(preset.get("decodingTileWidth", 768) or 768),
+            "overlap_px": int(preset.get("decodingTileOverlap", 64) or 64),
+            "diffusion": bool(preset.get("tiledDiffusion", False)),
+        }
         steps = preset.get("steps", preset.get("recommended_steps", 16))
         cfg = preset.get("guidanceScale", preset.get("recommended_cfg", 7.0))
 
@@ -1982,6 +1992,27 @@ def generate_image(
             )
         if hires_fix:
             GenerationConfiguration.AddHiresFixStrength(builder, hires_fix_strength)
+
+        # Tiled decoding/diffusion, when the active preset asks for it.
+        # Required for 16MP-class models (H3 Image) and useful on small cards.
+        tiling = state.preset_tiling or {}
+        if tiling.get("enabled"):
+            # A 256px tile (4 units) crashed the server for a 1024px SDXL run;
+            # 768px (12 units) works, so clamp to a safe floor and keep the
+            # overlap well under the tile.
+            tile_px = max(512, int(tiling.get("tile_px", 768) or 768))
+            overlap_px = min(max(0, int(tiling.get("overlap_px", 64) or 64)), tile_px // 4)
+            if tile_px != int(tiling.get("tile_px", 768) or 768):
+                status += f"⚠️ Tile size raised to {tile_px}px (smaller tiles crash the server)\n"
+            tile_units = max(8, tile_px // 64)
+            overlap_units = max(0, overlap_px // 64)
+            GenerationConfiguration.AddTiledDecoding(builder, True)
+            GenerationConfiguration.AddDecodingTileWidth(builder, tile_units)
+            GenerationConfiguration.AddDecodingTileHeight(builder, tile_units)
+            GenerationConfiguration.AddDecodingTileOverlap(builder, overlap_units)
+            status += f"🧩 Tiled decoding: {tile_px}px tiles, {overlap_px}px overlap\n"
+        if tiling.get("diffusion"):
+            GenerationConfiguration.AddTiledDiffusion(builder, True)
 
         # Performance optimizations
         GenerationConfiguration.AddTeaCache(builder, tea_cache)

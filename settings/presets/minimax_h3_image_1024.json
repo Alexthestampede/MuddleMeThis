@@ -1,0 +1,21 @@
+{
+  "name": "MiniMax H3 Image — 1024 safe (beta)",
+  "description": "MiniMax H3 Image at 1024x1024, untiled — cheap sanity checks and low-VRAM runs",
+  "base_resolution": 1024,
+  "clip_skip": 1,
+  "model": "minimax_h3_image_i4x.ckpt",
+  "steps": 6,
+  "guidanceScale": 1,
+  "sampler": 16,
+  "shift": 3,
+  "strength": 1,
+  "width": 1024,
+  "height": 1024,
+  "seedMode": 2,
+  "seed": 1837836667,
+  "hiresFix": false,
+  "tiledDecoding": false,
+  "tiledDiffusion": false,
+  "colorCalibration": "none",
+  "notes": "BETA / UNVERIFIED: deliberately conservative 1024x1024 run of H3 Image, matching the resolution most other models use. Same official sampling (6 steps, TFG 1, DDIM Trailing, shift 3) but far below the model's 16MP sweet spot, so expect weaker detail - this exists to verify the model loads and the pipeline works before spending a 16MP run on a 12GB card. Untiled because 1024 fits comfortably. Kontext-style: up to 16 refs as <Picture N>, strength 1.0."
+}
