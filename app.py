@@ -404,6 +404,41 @@ def _ensure_grpc_alive(wait_s: float = 10.0) -> Optional[str]:
     )
 
 
+def _resolve_model_file(model: str) -> tuple:
+    """Map a display name to the server filename, or report it unresolved.
+
+    Sending a display name ("realDream_15SD15 (8-bit)") instead of the file
+    ("realdream_15sd15_q6p_q8p.ckpt") does NOT error: the server returns
+    noise. So resolve by mapping, then by catalog, then flag it.
+    """
+    mapped = state.model_name_to_file.get(model)
+    if mapped:
+        return mapped, True
+
+    import model_catalog as _mc
+
+    entry = _mc.find(state.model_catalog or [], model)
+    if entry:
+        return entry["file"], True
+
+    # A server filename always carries an extension; anything else is a
+    # display name we failed to resolve.
+    if "." in model:
+        return model, True
+    return model, False
+
+
+def _sampler_id(sampler_name: str) -> tuple:
+    """Resolve a sampler name to its id, tolerating case/spacing variants."""
+    if sampler_name in SAMPLERS:
+        return SAMPLERS[sampler_name], True
+    wanted = sampler_name.replace(" ", "").lower()
+    for name, sid in SAMPLERS.items():
+        if name.replace(" ", "").lower() == wanted:
+            return sid, True
+    return SAMPLERS[SAMPLER_DEFAULT], False
+
+
 def _release_llm_vram() -> None:
     """Unload Ollama models before a Draw Things run.
 
@@ -1735,7 +1770,7 @@ def generate_image(
         return
 
     # Translate display names to actual filenames for gRPC
-    model_file = state.model_name_to_file.get(model, model)
+    model_file, model_resolved = _resolve_model_file(model)
     lora1_file = (
         state.lora_name_to_file.get(lora1, lora1)
         if lora1 and lora1.strip() and lora1 != "None"
@@ -1752,6 +1787,7 @@ def generate_image(
 
     try:
         # Get model metadata FIRST to determine latent size and base resolution (use filename)
+        metadata_ok = False
         try:
             model_info = state.grpc_metadata.get_latent_info(model_file)
             latent_size = (
@@ -1763,11 +1799,14 @@ def generate_image(
             print(f"   Version: {version}")
             print(f"   Latent Size: {latent_size}")
             print(f"   Default Scale: {model_info.get('default_scale', 'N/A')}")
+            metadata_ok = True
         except Exception as e:
-            # Fallback: assume SDXL
+            # No metadata: do NOT assume SDXL. Guessing latent_size=128 adds
+            # SDXL original/target conditioning to e.g. an SD1.5 model, which
+            # renders pure noise. Skip conditioning instead and warn.
             print(f"\n⚠️  Failed to get model metadata: {e}")
             latent_size = 128
-            version = "sdxl"
+            version = "unknown"
 
         # Use the base resolution that was set by model/preset selection
         # This ensures aspect ratios match what's in the dropdown
@@ -1944,9 +1983,10 @@ def generate_image(
             builder, scale_height
         )  # SCALE FACTOR not pixels!
 
-        # SDXL conditioning (required for SDXL models with latent_size=128)
-        # These tell SDXL what resolution it should target
-        if latent_size == 128:  # SDXL models
+        # SDXL conditioning (required for SDXL models with latent_size=128).
+        # Only when the latent size actually came from the server: applying it
+        # to an unknown model produces noise, not an error.
+        if latent_size == 128 and metadata_ok:
             GenerationConfiguration.AddOriginalImageWidth(builder, width)
             GenerationConfiguration.AddOriginalImageHeight(builder, height)
             GenerationConfiguration.AddTargetImageWidth(builder, width)
@@ -1962,7 +2002,7 @@ def generate_image(
         GenerationConfiguration.AddModel(builder, model_offset)
 
         # Get sampler ID from name
-        sampler_id = SAMPLERS.get(sampler_name, 0)
+        sampler_id, sampler_ok = _sampler_id(sampler_name)
         GenerationConfiguration.AddSampler(builder, sampler_id)
 
         GenerationConfiguration.AddBatchCount(builder, 1)
@@ -2032,6 +2072,25 @@ def generate_image(
             device=imageService_pb2.LAPTOP,
             chunked=False,
         )
+
+        if not model_resolved:
+            status += (
+                "\n⚠️ Model name not resolved to a server filename — the "
+                "server may return noise instead of an error. Reconnect in "
+                "Settings so the model list loads.\n"
+            )
+        if not sampler_ok:
+            status += (
+                f"\n⚠️ Sampler '{sampler_name}' not recognised — using "
+                f"{SAMPLER_DEFAULT}.\n"
+            )
+
+        if not metadata_ok:
+            status += (
+                "\n⚠️ Model metadata unavailable — SDXL conditioning skipped. "
+                "If the result looks like noise, reconnect in Settings so the "
+                "model list loads, and check the model filename case.\n"
+            )
 
         status += "\n📡 Sending request to server...\n"
 
