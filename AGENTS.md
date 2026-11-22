@@ -94,7 +94,7 @@ Ollama unloads models after 5 min idle, so every cold call pays model load + vis
 - `_ensure_grpc_alive()` pings before each run (waiting up to 10 s for a restarting server) and fails fast with instructions; previously a dead server burned the whole request.
 - `_release_llm_vram()` frees Ollama first; everything else must be stopped by hand, which the Video tab says in the UI.
 
-**When the server disappears, check before theorising.** Observed after heavy H3 runs: `gRPCServerCLI` alive but spinning at ~94% CPU with ~730 MB RSS and **no VRAM**, then gone, while machine uptime stays high. That pattern fits *either* a memory kill *or* the container updating itself, and an update window has already produced one false diagnosis here (see below). Use mcpee: `uptime_s` (host reboot vs service restart), `vram_free_mb`, `compute_apps`; an empty process list means the server is down — wait for it or restart it before any run. Only `journalctl -k | grep -i oom` / `journalctl -u systemd-oomd` on the host can actually settle *why*.
+**When the server disappears, read the pattern, don't guess.** Observed after heavy H3 runs: `gRPCServerCLI` alive but spinning at ~94% CPU with ~730 MB RSS and **no VRAM**, then gone, then back. The supervisor restarting it is expected; what matters is *what the run was doing* when it died. Use mcpee for timing and memory (`vram_free_mb`, `compute_apps`, `uptime_s` — uptime only proves the host is fine), and treat repeated deaths on identical settings as a config the server cannot handle.
 
 **A blank preview means the run is already dead.** A memory-starved H3 render still advances the progress bar while emitting empty latents: the low-res preview is flat gray, often with a single colored dot (measured std 0.0–0.5, versus ~49 for real content). `generate_video` watches previews and flips the progress text to "blank previews (likely memory pressure)" after three consecutive flat ones, ~3 minutes before the crash.
 
@@ -118,10 +118,11 @@ Model lists are enriched at gRPC connect: `{file, name, family, supports(image|v
 - **MiniMax H3 Image** (`minimax_h3_image_i4x.ckpt`, **beta**): 6 steps, TFG 1, DDIM Trailing, shift 3, **4096×4096 = 16 MP**, no resolution-dependent shift, kontext-style with up to 16 refs (`<Picture N>`), strength 1.0. Preset is verbatim from the official export; the model is not on `.150` and gRPC support is unconfirmed — treat failures there as expected, not as a bug in the app. Do not let `supports()` classify it as video just because the name contains "h3". Three presets ship: vanilla (tiling off, provenance), `_tiled` (768 px tiles for 12 GB), `_1024` (conservative sanity check).
 - **Tiled decoding is preset-driven** (`tiledDecoding`/`decodingTileWidth`/`decodingTileOverlap`, pixels; converted to scale units as `//64`). It is not in the UI. No clamp: a 256 px tile (the H3 VAE reference size) was verified working with a raw FlatBuffer run.
 
-**Transient `UNAVAILABLE` is often the server updating itself.** `.150` kills gRPC while it pulls/restarts the container, so a run can die with `Stream removed (Socket closed)` and the process then vanish or spin, with the machine itself never rebooting. Before blaming memory or your own settings:
-- mcpee `uptime_s`: machine uptime staying high while `gRPCServerCLI` disappears means a service restart, not a host crash.
-- Retry after ~10 s; the app's preflight (`_ensure_grpc_alive`) and retry-with-reconnect already wait for it.
-- An earlier note here claimed `systemd-oomd` was reaping the server and that small tiles crashed it — **both were unverified inferences** during an update window. 256 px tiles and heavy H3 runs have since worked on the same box. Treat "it died" as inconclusive until uptime/logs say otherwise.
+**The host never crashes — the gRPC *process* does, and a supervisor restarts it.** `gRPCServerCLI` on .150 dies for several reasons (out of memory, parameter combinations it does not tolerate), and comes back within seconds; the machine's uptime keeps climbing throughout. Consequences:
+- A run dying with `Stream removed (Socket closed)` means **the process crashed**, not the host and not necessarily an update. Uptime staying high tells you nothing about the cause — the host was never going to reboot.
+- Because the supervisor recovers it quickly, retrying is cheap and the app's 8 s wait + `_ensure_grpc_alive` preflight are the right response to the outage.
+- But recovery hides the cause: if runs keep dying on the *same* settings, that config is crashing the server (memory or unsupported parameters) — do not keep retrying, change the config and check the server logs.
+- Only `journalctl -k | grep -i oom` / `journalctl -u systemd-oomd` and the container logs actually settle *why*. Updates are one possible cause among crashes, not the default explanation.
 
 ## Testing
 
