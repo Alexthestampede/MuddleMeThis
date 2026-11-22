@@ -27,7 +27,7 @@ from datetime import datetime
 import numpy as np
 
 # Application version (calendar-based, like dtline: YYYYMMDD.release)
-APP_VERSION = "20261003.1"
+APP_VERSION = "20261122.1"
 
 # Suppress gRPC SSL handshake warnings (these are harmless when using self-signed certs)
 os.environ["GRPC_VERBOSITY"] = "ERROR"
@@ -2511,6 +2511,312 @@ def generate_video(
         yield None, f"❌ Error during video generation:\n{str(e)}\n\nDetails:\n{error_details}"
 
 
+# ============================================================================
+# Actor Reference Sheet
+# ----------------------------------------------------------------------------
+# Prompt-only method from Cutscene Artist's Storyflow demo
+# (https://cutsceneartist.com/DrawThings/): one face photo becomes a
+# standardized sheet -- face close-up on the left, three-view turnaround on
+# the right, white background -- so the same actor can drive video and edit
+# models. The 4-section prompt is the whole trick; the photo rides along as a
+# moodboard/reference image instead of the Storyflow script pipeline.
+# ============================================================================
+
+ACTOR_SHEET_SIZE = (2048, 1152)  # 16:9, the sheet layout from the demo
+
+ACTOR_SHEET_THESIS = (
+    "The image is multiple views of the same actor wearing the same costume "
+    "on white background."
+)
+ACTOR_SHEET_FACE = (
+    "At left, close-up face of the actor, facing front, calm expression."
+)
+ACTOR_SHEET_VIEWS = (
+    "At right, three full-body views of the actor, facing front, rotated "
+    "partial profile, back view."
+)
+
+# Sent as the vision prompt: only the actor, never the clothes or scene.
+ACTOR_INTERROGATE_PROMPT = (
+    "Write a brief sentence describing this Actor. Include their gender, age, "
+    "hair texture and style, eye and skin-color. Mention facial hair (beard, "
+    "mustache), glasses, or makeup only if they are visible. Do not list "
+    "clothing. Do not mention environment. Reply with 1 complete sentence "
+    'starting with "The Actor is ".'
+)
+
+# Costume wildcard from the video's project, spelling tidied.
+ACTOR_COSTUMES = [
+    "a formal Venetian masked ball with ornate rococo fancy dress.",
+    "skimpy swimwear revealing their physique.",
+    "surgery scrubs with mask and latex gloves.",
+    "a burglar mask, black cap and turtleneck, and leather gloves.",
+    "a desert island castaway in rags.",
+    "a steampunk world traveller.",
+    "a sci-fi space explorer.",
+    "a dieselpunk air pilot.",
+]
+
+
+def _as_sentence(text: str) -> str:
+    """Collapse whitespace and guarantee terminal punctuation."""
+    text = " ".join((text or "").split())
+    if text and text[-1] not in ".!?":
+        text += "."
+    return text
+
+
+def build_actor_sheet_prompt(actor_description: str, costume: str) -> str:
+    """Assemble the 4-section actor-sheet prompt.
+
+    Section 1 is a plain thesis that creates the two attention anchors
+    ("actor" and "costume"); section 2 defines those anchors; sections 3 and 4
+    describe the layout (face close-up left, three views right).
+    """
+    actor = _as_sentence(actor_description)
+    if not actor:
+        actor = "The actor is the person in the reference photo."
+    elif not actor.lower().startswith("the actor is "):
+        actor = "The actor is " + actor
+
+    costume = _as_sentence(costume)
+    costume_sentence = f" The costume is {costume}" if costume else ""
+
+    return "\n\n".join(
+        [
+            ACTOR_SHEET_THESIS,
+            (actor + costume_sentence).strip(),
+            ACTOR_SHEET_FACE,
+            ACTOR_SHEET_VIEWS,
+        ]
+    )
+
+
+def _image_to_base64_jpeg(image, max_size: int = 1024) -> str:
+    """Downscale a Gradio image to a JPEG data string small enough for Ollama."""
+    img = image if isinstance(image, Image.Image) else Image.fromarray(image)
+    img = img.convert("RGB")
+    if max(img.size) > max_size:
+        ratio = max_size / max(img.size)
+        img = img.resize(
+            (max(1, int(img.width * ratio)), max(1, int(img.height * ratio))),
+            Image.Resampling.LANCZOS,
+        )
+    buffered = io.BytesIO()
+    img.save(buffered, format="JPEG", quality=85)
+    return base64.b64encode(buffered.getvalue()).decode()
+
+
+def describe_actor(image):
+    """Interrogate the photo for the sheet's actor sentence (section 2)."""
+    if not state.vision_processor:
+        return gr.update(), "❌ Vision processor not initialized. Configure in Settings tab first."
+
+    if image is None:
+        return gr.update(), "❌ Please upload an actor photo first"
+
+    try:
+        img_base64 = _image_to_base64_jpeg(image)
+        started = time.time()
+        result = state.vision_processor.analyze_image(
+            image_data=img_base64,
+            prompt=ACTOR_INTERROGATE_PROMPT,
+            temperature=0.2,
+            max_tokens=min(256, int(settings.get("llm_max_tokens", 700))),
+            **_ollama_extras(),
+        )
+        elapsed = time.time() - started
+
+        if result:
+            return result.strip(), f"🧠 Actor described in {elapsed:.1f}s — edit it if the model missed something."
+        return gr.update(), _llm_failure_message("describe the actor", elapsed)
+    except Exception as e:
+        return gr.update(), f"❌ Error: {str(e)}"
+
+
+def _fit_on_white(image: Image.Image, width: int, height: int) -> Image.Image:
+    """Letterbox a reference to the render aspect ratio (no stretching)."""
+    img = image.convert("RGB")
+    ratio = min(width / img.width, height / img.height)
+    new_size = (max(1, int(img.width * ratio)), max(1, int(img.height * ratio)))
+    img = img.resize(new_size, Image.Resampling.LANCZOS)
+    canvas = Image.new("RGB", (width, height), (255, 255, 255))
+    canvas.paste(img, ((width - img.width) // 2, (height - img.height) // 2))
+    return canvas
+
+
+@_single_flight
+def generate_actor_sheet(
+    photo,
+    prompt: str,
+    model: str,
+    steps: int,
+    cfg_scale: float,
+    sampler_name: str,
+    lora1: str,
+    lora1_weight: float,
+    negative_prompt: str,
+    seed: int,
+    clip_skip: int,
+    shift: float,
+    res_dependent_shift: bool,
+    progress=gr.Progress(),
+):
+    """Render an actor reference sheet with the photo attached as reference."""
+    if not state.grpc_client:
+        yield None, "❌ gRPC not initialized. Configure in Settings tab first."
+        return
+
+    unreachable = _ensure_grpc_alive()
+    if unreachable:
+        yield None, unreachable
+        return
+
+    if photo is None:
+        yield None, "❌ No actor photo provided — it is the reference image."
+        return
+
+    if not prompt or not prompt.strip():
+        yield None, "❌ No prompt — add an actor description or build one first."
+        return
+
+    if not model:
+        yield None, "❌ No model selected"
+        return
+
+    width, height = ACTOR_SHEET_SIZE
+    start_time = time.time()
+
+    try:
+        photo_pil = Image.fromarray(photo.astype("uint8")).convert("RGB")
+        reference = _fit_on_white(photo_pil, width, height)
+
+        model_file = state.model_name_to_file.get(model, model)
+        loras = []
+        if lora1 and lora1 != "None" and lora1.strip():
+            lora_file = state.lora_name_to_file.get(lora1, lora1)
+            loras.append(LoRAConfig(file=lora_file, weight=lora1_weight))
+
+        actual_seed = (
+            seed if seed is not None and seed >= 0 else random_module.randint(0, 2**32 - 1)
+        )
+
+        import math
+
+        final_shift = float(shift)
+        if res_dependent_shift:
+            resolution_factor = (width * height) / 256
+            final_shift = math.exp(
+                ((resolution_factor - 256) * (1.15 - 0.5) / (4096 - 256)) + 0.5
+            )
+
+        config = ImageGenerationConfig(
+            model=model_file,
+            steps=steps,
+            width=width,
+            height=height,
+            cfg_scale=cfg_scale,
+            scheduler=sampler_name,
+            seed=actual_seed,
+            strength=1.0,
+            seed_mode=2,
+            clip_skip=clip_skip,
+            shift=final_shift,
+            resolution_dependent_shift=res_dependent_shift,
+            loras=loras,
+        )
+
+        status = (
+            f"🧑‍🎨 Rendering actor sheet…\n"
+            f"Model: {model}\n"
+            f"Size: {width}×{height}\n"
+            f"Steps: {steps}, CFG: {cfg_scale}, Sampler: {sampler_name}\n"
+            f"Seed: {actual_seed}"
+        )
+        yield None, status
+
+        _release_llm_vram()
+
+        def _progress(stage: str, step: int) -> None:
+            progress(step / max(steps, 1), desc=stage)
+
+        result = state.grpc_client.generate_media(
+            prompt=prompt,
+            config=config,
+            negative_prompt=negative_prompt or "",
+            reference_images=[
+                ReferenceImage(image=reference, weight=1.0, hint_type="shuffle")
+            ],
+            progress_callback=_progress,
+        )
+
+        if not result.images:
+            yield None, status + "\n❌ No image generated"
+            return
+
+        sheet = tensor_to_pil(result.images[0])
+        elapsed = time.time() - start_time
+
+        outputs_dir = Path("outputs")
+        outputs_dir.mkdir(exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"actor_sheet_{timestamp}_s{actual_seed}.png"
+        filepath = outputs_dir / filename
+
+        metadata = PngInfo()
+        metadata.add_text("prompt", prompt)
+        metadata.add_text("comment", prompt)
+        metadata.add_text("created_with", "MuddleMeThis")
+        metadata.add_text("model", model)
+        metadata.add_text("model_file", model_file)
+        metadata.add_text("steps", str(steps))
+        metadata.add_text("cfg_scale", str(cfg_scale))
+        metadata.add_text("sampler", sampler_name)
+        metadata.add_text("seed", str(actual_seed))
+        metadata.add_text("shift", f"{final_shift:.3f}")
+        metadata.add_text("clip_skip", str(clip_skip))
+        metadata.add_text("size", f"{width}x{height}")
+        metadata.add_text("reference", "actor photo")
+        metadata.add_text("generation_time", f"{elapsed:.1f}s")
+
+        sheet_xmp = build_draw_things_xmp(
+            prompt=prompt,
+            negative_prompt=negative_prompt or "",
+            model=model,
+            width=width,
+            height=height,
+            steps=steps,
+            sampler_name=sampler_name,
+            cfg_scale=cfg_scale,
+            seed=actual_seed,
+            shift=final_shift,
+            lora1=lora1 if lora1 and lora1 != "None" else None,
+            lora1_weight=lora1_weight,
+            strength=1.0,
+            seed_mode=2,
+            clip_skip=clip_skip,
+        )
+        metadata.add_text("XML:com.adobe.xmp", sheet_xmp)
+        metadata.add_text("xmp", sheet_xmp)
+
+        sheet.save(filepath, pnginfo=metadata)
+
+        final_status = (
+            status
+            + f"\n\n✅ Actor sheet complete in {elapsed:.1f}s!\n"
+            + f"💾 Saved: {filename}\n"
+            + "\nTip: drop the sheet on the Moodboard (or use it as a reference "
+            "image) for LTX/H3 video and edit runs."
+        )
+        yield sheet, final_status
+
+    except Exception as e:
+        import traceback
+
+        error_details = traceback.format_exc()
+        yield None, f"❌ Error during actor sheet render:\n{str(e)}\n\nDetails:\n{error_details}"
+
+
 @_single_flight
 def edit_image(
     input_image,
@@ -3433,7 +3739,7 @@ def create_ui():
                                 )
                             edit_shift = gr.Slider(
                                 0.0,
-                                10.0,
+                                20.0,
                                 3.0,
                                 step=0.1,
                                 label="Shift",
@@ -3452,6 +3758,131 @@ def create_ui():
                     with gr.Column(scale=3):
                         edit_result_image = gr.Image(label="Edited Result")
                         edit_status = gr.Textbox(label="Status", lines=12)
+
+            # ==================================================================
+            # TAB: Actor Reference Sheet
+            # ==================================================================
+            with gr.Tab("🧑‍🎨 Actor Sheet"):
+                gr.Markdown("### One photo → a standardized actor reference sheet")
+                gr.Markdown(
+                    "*Prompt-only method from [Cutscene Artist's Storyflow demo]"
+                    "(https://cutsceneartist.com/DrawThings/): a face close-up plus "
+                    "a three-view turnaround on white, ready as a reference image for "
+                    "LTX/H3 video or edit models. Attach the photo to an "
+                    "**edit/kontext** model (Qwen Image 2.1, FLUX Klein) — a "
+                    "text-only model has no way to see it.*"
+                )
+
+                with gr.Row():
+                    with gr.Column(scale=2):
+                        sheet_photo = gr.Image(
+                            label="Actor photo (headshot or upper body)",
+                            type="numpy",
+                            sources=["upload", "webcam", "clipboard"],
+                        )
+                        sheet_describe_btn = gr.Button("🔍 Describe actor from photo")
+                        sheet_actor = gr.Textbox(
+                            label="The actor is…",
+                            lines=3,
+                            placeholder="The actor is a 32-year-old woman with …",
+                        )
+                        with gr.Row():
+                            sheet_costume = gr.Textbox(
+                                label="The costume is…",
+                                lines=2,
+                                value=ACTOR_COSTUMES[0],
+                                scale=4,
+                            )
+                            sheet_costume_dice = gr.Button("🎲 Random", scale=1)
+
+                        with gr.Accordion("Model & settings", open=True):
+                            sheet_model = gr.Dropdown(
+                                label="Model",
+                                choices=[],
+                                value="",
+                                interactive=True,
+                                allow_custom_value=True,
+                                info="Use an edit/kontext model so the photo is seen",
+                            )
+                            sheet_model_search = gr.Textbox(
+                                label="Search models",
+                                placeholder="name, file or family…",
+                            )
+                            sheet_model_info = gr.Markdown(
+                                value="_Select a model to see its family and preset._"
+                            )
+                            sheet_preset = gr.Dropdown(
+                                label="Preset",
+                                choices=["Custom (no preset)"],
+                                value="Custom (no preset)",
+                                interactive=True,
+                            )
+                            sheet_preset_info = gr.Textbox(
+                                label="Preset Info",
+                                value="Select a model first to see available presets",
+                                interactive=False,
+                                lines=2,
+                            )
+                            with gr.Row():
+                                sheet_steps = gr.Slider(1, 100, 8, step=1, label="Steps")
+                                sheet_cfg = gr.Slider(
+                                    0.0, 20.0, 1.0, step=0.1, label="CFG Scale"
+                                )
+                            sheet_sampler = gr.Dropdown(
+                                choices=SAMPLER_NAMES,
+                                value="DDIM Trailing",
+                                label="Sampler",
+                            )
+                            with gr.Row():
+                                sheet_seed = gr.Number(
+                                    label="Seed (-1 = random)", value=-1, precision=0
+                                )
+                                sheet_clip_skip = gr.Slider(
+                                    1, 12, 1, step=1, label="CLIP Skip"
+                                )
+                            with gr.Row():
+                                sheet_lora1 = gr.Dropdown(
+                                    label="LoRA",
+                                    choices=["None"],
+                                    value="None",
+                                    interactive=True,
+                                    allow_custom_value=True,
+                                    scale=3,
+                                )
+                                sheet_lora1_weight = gr.Slider(
+                                    0.0, 2.0, 1.0, step=0.05, label="Weight", scale=1
+                                )
+                            with gr.Accordion("Advanced", open=False):
+                                sheet_shift = gr.Slider(
+                                    0.0,
+                                    20.0,
+                                    3.0,
+                                    step=0.1,
+                                    label="Shift",
+                                    info="Qwen Edit default: 3.0; turbo presets set their own",
+                                )
+                                sheet_res_shift = gr.Checkbox(
+                                    value=False,
+                                    label="Resolution-Dependent Shift",
+                                    info="Auto-calculate shift from resolution (Qwen 2.1 base, FLUX)",
+                                )
+                                sheet_negative = gr.Textbox(
+                                    label="Negative Prompt",
+                                    value="blurry, low quality, distorted",
+                                    lines=2,
+                                )
+
+                    with gr.Column(scale=3):
+                        sheet_prompt = gr.Textbox(
+                            label="Sheet prompt (auto-built — edit freely)",
+                            lines=14,
+                            value=build_actor_sheet_prompt("", ACTOR_COSTUMES[0]),
+                        )
+                        sheet_generate_btn = gr.Button(
+                            "🪪 Generate actor sheet", variant="primary", size="lg"
+                        )
+                        sheet_result = gr.Image(label="Actor sheet")
+                        sheet_status = gr.Textbox(label="Status", lines=10)
 
             # ==================================================================
             # TAB 7: Video Generation
@@ -4040,7 +4471,7 @@ def create_ui():
 
                     gen_shift = gr.Slider(
                         0.0,
-                        10.0,
+                        20.0,
                         1.0,
                         label="Shift",
                         step=0.1,
@@ -4346,6 +4777,87 @@ def create_ui():
             ],
         )
 
+        # Actor Sheet: interrogate the photo, rebuild the prompt, render the sheet
+        sheet_describe_btn.click(
+            fn=describe_actor,
+            inputs=[sheet_photo],
+            outputs=[sheet_actor, sheet_status],
+        )
+
+        sheet_costume_dice.click(
+            fn=lambda: random_module.choice(ACTOR_COSTUMES),
+            inputs=[],
+            outputs=[sheet_costume],
+        )
+
+        def _refresh_sheet_prompt(actor, costume):
+            return build_actor_sheet_prompt(actor, costume)
+
+        sheet_actor.change(
+            fn=_refresh_sheet_prompt,
+            inputs=[sheet_actor, sheet_costume],
+            outputs=[sheet_prompt],
+        )
+        sheet_costume.change(
+            fn=_refresh_sheet_prompt,
+            inputs=[sheet_actor, sheet_costume],
+            outputs=[sheet_prompt],
+        )
+
+        sheet_model.change(
+            fn=lambda model: on_model_picked(model, "edit"),
+            inputs=[sheet_model],
+            outputs=[
+                sheet_model_info,
+                sheet_preset,
+                sheet_steps,
+                sheet_cfg,
+                sheet_preset_info,
+                sheet_sampler,
+                sheet_shift,
+                sheet_res_shift,
+                sheet_clip_skip,
+            ],
+        )
+        sheet_model_search.input(
+            fn=lambda q, cur: refresh_model_choices(q, True, cur),
+            inputs=[sheet_model_search, sheet_model],
+            outputs=[sheet_model],
+        )
+        sheet_preset.change(
+            fn=on_edit_preset_selected,
+            inputs=[sheet_preset],
+            outputs=[
+                sheet_steps,
+                sheet_cfg,
+                sheet_preset_info,
+                sheet_sampler,
+                sheet_shift,
+                sheet_res_shift,
+                sheet_clip_skip,
+            ],
+        )
+
+        sheet_generate_btn.click(
+            fn=generate_actor_sheet,
+            inputs=[
+                sheet_photo,
+                sheet_prompt,
+                sheet_model,
+                sheet_steps,
+                sheet_cfg,
+                sheet_sampler,
+                sheet_lora1,
+                sheet_lora1_weight,
+                sheet_negative,
+                sheet_seed,
+                sheet_clip_skip,
+                sheet_shift,
+                sheet_res_shift,
+            ],
+            outputs=[sheet_result, sheet_status],
+        )
+
         # Wire up gRPC connection to update ALL dropdowns (settings, generation, and edit)
         # This is done here because gen_model, edit_model, etc. are created after grpc_connect_btn
         def init_grpc_all(server_url):
@@ -4360,8 +4872,23 @@ def create_ui():
                 choices=video_choices,
                 value=video_entries[0]["name"] if video_entries else None,
             )
+            # Actor Sheet defaults to an edit/kontext model when one is present,
+            # because the uploaded photo only reaches the render as a reference.
+            sheet_entries = _mc.filter_catalog(state.model_catalog, "", True)
+            sheet_choices = [(e["label"], e["name"]) for e in sheet_entries]
+            sheet_default = None
+            for needle in ("qwen image 2.1", "klein", "kontext", "edit"):
+                sheet_default = next(
+                    (e["name"] for e in sheet_entries if needle in e["name"].lower()),
+                    None,
+                )
+                if sheet_default:
+                    break
+            if not sheet_default and sheet_entries:
+                sheet_default = sheet_entries[0]["name"]
+            sheet_update = gr.update(choices=sheet_choices, value=sheet_default)
             # Return: status, settings_models, settings_loras, gen_models, gen_lora1, gen_lora2,
-            #         edit_model, edit_lora1, edit_lora2, video_model
+            #         edit_model, edit_lora1, edit_lora2, video_model, sheet_model
             return (
                 status,
                 models_dropdown,
@@ -4373,6 +4900,7 @@ def create_ui():
                 loras_dropdown,
                 loras_dropdown,
                 video_update,
+                sheet_update,
             )
 
         # Wire video generation button
@@ -4471,6 +4999,7 @@ def create_ui():
                 edit_lora1,
                 edit_lora2,
                 video_model,
+                sheet_model,
             ],
         )
 

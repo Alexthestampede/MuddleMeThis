@@ -29,7 +29,7 @@ Access: http://localhost:7860
 
 ## Entry Points & Structure
 
-- `app.py` — Main Gradio app (~3500 lines). Video tab wired near the end (`create_ui`).
+- `app.py` — Main Gradio app (~3500 lines). Video tab wired near the end (`create_ui`). Actor Sheet tab renders the Cutscene Artist reference-sheet prompt and passes the uploaded photo as an edit reference.
 - `settings_manager.py` — Config persistence (JSON).
 - `dev/DTgRPCconnector/` — gRPC client. **Synced from dtline (latest: 27c4b31 / 20261121.2)**; keep our audio-mux + keepalive patches when re-syncing: `save_images()` decodes CCV tensors (incl. RGBA), `save_video()` auto-detects tensors, `decode_audio()`/`mux_audio_into_video()` are ours. `drawthings_client.py` (client + audio muxing), `tensor_decoder.py` (`tensor_to_pil`, `decode_audio_tensor`), `GenerationConfiguration.py` (FlatBuffer schema; slots 86+ = newer server fields).
 - `dev/ModuLLe/` — LLM provider abstraction (Ollama/LM Studio/OpenAI/Gemini/Claude), synced from github.com/Alexthestampede/ModuLLe (calendar-versioned). Editable install; its pyproject pulls `beautifulsoup4`, `html2text`, `ddgs`, `lxml` for web/tools modules (`modulle/__init__` imports lazily, so the app works without them).
@@ -51,6 +51,12 @@ Wrong scale crashes the server: `[cnnp_reshape_build] dim: (2, 262144, 320)`.
 - **First-frame conditioning (I2V)**: pass the starting image as `input_image` with `strength=1.0`. `reference_images` + `hint_type="shuffle"` is for edit/kontext models only — LTX ignores it.
 - **Hires fix for LTX** = two-stage latent spatial upscaling (LTX-native ×2/×1.5 upscaler, no external upscaler file). Auto-triggers when first-pass size is exactly 1/2 or 2/3 of final. Preset: 640×384 → 1280×768.
 - Muxing: NaN/Inf audio chunks happen; sanitize, ensure even float32 sample counts, mux via intermediate WAV file — `DrawThingsClient.mux_audio_into_video()`.
+
+### Actor Sheet tab (prompt-only Storyflow method)
+- One photo → 2048×1152 sheet (face left, three views right) from Cutscene Artist's 4-section prompt. The photo is passed as a `ReferenceImage` hint (`hint_type="shuffle"`), so **only edit/kontext models can see it** — a text-only checkpoint renders a stranger.
+- Reference images are letterboxed to the render aspect (`_fit_on_white`) because the connector resizes hint tensors to the config size; stretching a portrait squashes the face.
+- `describe_actor()` fills section 2 via the vision processor, capped at 256 tokens. Costume is free text with the demo's wildcard list and a randomiser.
+- Saved sheets are ordinary PNGs in `outputs/` with Draw Things XMP; they are meant to be re-attached as moodboard/reference for LTX/H3 video.
 
 ### TLS / gRPC connection
 TLS is the default. Self-signed certs need the localhost name override — already in our connector: `grpc.ssl_target_name_override = "localhost"` + `ssl_cert_path` to `dev/DTgRPCconnector/root_ca.crt` (app.py lines ~743).
