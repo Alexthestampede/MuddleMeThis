@@ -3739,7 +3739,7 @@ def create_ui():
                                 )
                             edit_shift = gr.Slider(
                                 0.0,
-                                10.0,
+                                20.0,
                                 3.0,
                                 step=0.1,
                                 label="Shift",
@@ -3855,7 +3855,7 @@ def create_ui():
                             with gr.Accordion("Advanced", open=False):
                                 sheet_shift = gr.Slider(
                                     0.0,
-                                    10.0,
+                                    20.0,
                                     3.0,
                                     step=0.1,
                                     label="Shift",
@@ -4471,7 +4471,7 @@ def create_ui():
 
                     gen_shift = gr.Slider(
                         0.0,
-                        10.0,
+                        20.0,
                         1.0,
                         label="Shift",
                         step=0.1,
