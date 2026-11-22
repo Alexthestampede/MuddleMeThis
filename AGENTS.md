@@ -134,7 +134,14 @@ Never trust `img is not None` as a success signal in this app — inspect the pi
 
 No test framework — standalone scripts requiring a live Draw Things server (192.168.2.150:7859):
 
+**Default test model: FLUX.2 Klein 4B** (`flux_2_klein_4b_i8x.ckpt`) — small, fast (~10-12 s at 1024²), and kontext/edit-capable, so it exercises text-to-image, tiled decoding and the reference-image path in one go. Being a small model does not make it more reliable than SD1.5, which is fine: a fast run you actually look at beats a slow one you skip.
+
 ```bash
+# Fast smoke test (look at the PNG it prints - a "successful" request can be noise)
+./venv/bin/python test_smoke.py          # 1024² untiled, ~10 s
+./venv/bin/python test_smoke.py --tiled  # + 512px tiled decoding
+./venv/bin/python test_smoke.py --edit   # + reference-image edit (kontext)
+
 # Video + speech audio test (speech exposes wrong pitch/sync; engine noise doesn't)
 ./venv/bin/python test_video_speech.py
 
