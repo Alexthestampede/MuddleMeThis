@@ -122,6 +122,8 @@ Model lists are enriched at gRPC connect: `{file, name, family, supports(image|v
 1. **A display name instead of a server filename yields noise, not an error.** `realDream_15SD15 (8-bit)` sent as `model` made the server return static; the correct `realdream_15sd15_q6p_q8p.ckpt` works. Filename case matters (`realDream...` ≠ `realdream...`, despite the version being `v1`). `_resolve_model_file()` now maps name → file via `model_name_to_file`, then the catalog, and warns when unresolved.
 2. **An unknown sampler name silently became DPM++ 2M Karras (id 0).** `"UniPC ays"` is not a key in `SAMPLERS` (it is `"UniPC AYS"`), so the request went out with sampler 0. `_sampler_id()` now matches case/spacing-insensitively and warns on fallback.
 
+**A checkpoint that is not on the server returns rainbow static, not an error** (verified with `minimax_h3_image_i4x.ckpt` before it was downloaded: std 107, loud RGB noise). `_model_on_server()` checks the connected model list and `generate_image` refuses up front with the resolved filename; it only warns when no list is loaded (offline/unconnected).
+
 Never trust `img is not None` as a success signal in this app — inspect the pixels.
 
 **The host never crashes — the gRPC *process* does, and a supervisor restarts it.** `gRPCServerCLI` on .150 dies for several reasons (out of memory, parameter combinations it does not tolerate), and comes back within seconds; the machine's uptime keeps climbing throughout. Consequences:

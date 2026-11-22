@@ -404,6 +404,22 @@ def _ensure_grpc_alive(wait_s: float = 10.0) -> Optional[str]:
     )
 
 
+def _model_on_server(model_file: str):
+    """True/False when the server model list is known, None when it is not.
+
+    A checkpoint that is not on the server does NOT raise: Draw Things
+    returns loud rainbow static. Callers should refuse before sending.
+    """
+    known = set()
+    for entry in state.model_catalog or []:
+        if entry.get("file"):
+            known.add(entry["file"].lower())
+    known.update((f or "").lower() for f in (state.model_name_to_file or {}).values())
+    if not known:
+        return None
+    return model_file.lower() in known
+
+
 def _resolve_model_file(model: str) -> tuple:
     """Map a display name to the server filename, or report it unresolved.
 
@@ -1771,6 +1787,18 @@ def generate_image(
 
     # Translate display names to actual filenames for gRPC
     model_file, model_resolved = _resolve_model_file(model)
+
+    on_server = _model_on_server(model_file)
+    if on_server is False:
+        yield (
+            None,
+            f"❌ Model '{model}' is not on the server.\n"
+            f"Resolved file: {model_file} — not present in the server's model list.\n"
+            "Download it in Draw Things, then reconnect in Settings.\n"
+            "(Draw Things answers a missing checkpoint with noise rather than "
+            "an error, so this is refused up front.)",
+        )
+        return
     lora1_file = (
         state.lora_name_to_file.get(lora1, lora1)
         if lora1 and lora1.strip() and lora1 != "None"
