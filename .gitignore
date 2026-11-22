@@ -58,3 +58,11 @@ MuddleMeThis.desktop
 temp/
 tmp/
 scratch/
+
+# Local reference drop-ins (app exports, notes, screenshots) - kept on disk,
+# not tracked. Only dev/DTgRPCconnector and dev/ModuLLe are source.
+dev/*.md
+dev/*.txt
+dev/*.png
+dev/*.swift
+dev/*.json
