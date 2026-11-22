@@ -60,6 +60,7 @@ FAMILY_BY_VERSION = {
     "ltx2": "LTX 2",
     "ltx2.3": "LTX 2.3",
     "minimax_h3": "MiniMax H3",
+    "minimax_h3_image": "MiniMax H3 Image",
     "wan_v2.1_1.3b": "Wan 2.1 1.3B",
     "wan_v2.1_14b": "Wan 2.1 14B",
     "wan_v2.2_5b": "Wan 2.2 5B",
@@ -120,6 +121,10 @@ def supports(version: str, name: str = "", file: str = "") -> str:
     """Return 'image', 'video' or 'upscaler'."""
     version = (version or "").lower()
     label = normalize(f"{name} {file}")
+    # MiniMax H3 has both a video model and an image model; the *_image
+    # variant must not be swept up by the "h3" video hint below.
+    if version.endswith("_image") or " h3 image" in f" {label} ":
+        return "image"
     if version in UPSCALER_VERSIONS or any(tok in label for tok in UPSCALER_HINTS):
         return "upscaler"
     if version in VIDEO_VERSIONS or any(tok in label for tok in VIDEO_HINTS):
