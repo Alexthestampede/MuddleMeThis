@@ -1997,14 +1997,12 @@ def generate_image(
         # Required for 16MP-class models (H3 Image) and useful on small cards.
         tiling = state.preset_tiling or {}
         if tiling.get("enabled"):
-            # A 256px tile (4 units) crashed the server for a 1024px SDXL run;
-            # 768px (12 units) works, so clamp to a safe floor and keep the
-            # overlap well under the tile.
-            tile_px = max(512, int(tiling.get("tile_px", 768) or 768))
+            # Values are pixels in the preset and scale units (//64) on the
+            # wire. Kept permissive: a 256px tile is the H3 VAE reference and
+            # was verified working, so no arbitrary floor.
+            tile_px = max(64, int(tiling.get("tile_px", 768) or 768))
             overlap_px = min(max(0, int(tiling.get("overlap_px", 64) or 64)), tile_px // 4)
-            if tile_px != int(tiling.get("tile_px", 768) or 768):
-                status += f"⚠️ Tile size raised to {tile_px}px (smaller tiles crash the server)\n"
-            tile_units = max(8, tile_px // 64)
+            tile_units = max(1, tile_px // 64)
             overlap_units = max(0, overlap_px // 64)
             GenerationConfiguration.AddTiledDecoding(builder, True)
             GenerationConfiguration.AddDecodingTileWidth(builder, tile_units)
